@@ -1,0 +1,62 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "world.jobo/developer",
+  "title": "Jobo Developer",
+  "description": "Look up Jobo company ids, occupations and filter values while you build on the Jobo jobs API.",
+  "version": "0.1.0",
+  "websiteUrl": "https://jobo.world/docs",
+  "icons": [
+    {
+      "src": "https://jobo.world/apple-touch-icon.png",
+      "mimeType": "image/png",
+      "sizes": ["180x180"]
+    },
+    {
+      "src": "https://jobo.world/favicon.svg",
+      "mimeType": "image/svg+xml",
+      "sizes": ["any"]
+    }
+  ],
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://dev-mcp.jobo.world/mcp",
+      "headers": [
+        {
+          "name": "Authorization",
+          "description": "Your Jobo API key, as a Bearer token. Needed by the three lookup tools (find_companies, find_filter_values, find_locations); the other tools work without it. Create a key at https://enterprise.jobo.world/api-keys.",
+          "isRequired": false,
+          "isSecret": true,
+          "value": "Bearer {api_key}",
+          "variables": {
+            "api_key": {
+              "description": "A Jobo API key (starts with jbe_live_).",
+              "isSecret": true
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "packages": [
+    {
+      "registryType": "npm",
+      "registryBaseUrl": "https://registry.npmjs.org",
+      "identifier": "jobo-developer-mcp",
+      "version": "0.1.0",
+      "runtimeHint": "npx",
+      "transport": {
+        "type": "streamable-http",
+        "url": "http://localhost:3003/mcp"
+      },
+      "environmentVariables": [
+        {
+          "name": "PORT",
+          "description": "Port for the local HTTP server (default 3003).",
+          "isRequired": false,
+          "format": "number"
+        }
+      ]
+    }
+  ]
+}
