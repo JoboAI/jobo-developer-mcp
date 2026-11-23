@@ -6,7 +6,7 @@
  * never a raw JSON body.
  */
 
-import { API_KEYS_URL, ApiKeyError, apiKeyErrorMessage } from "./auth.js";
+import { API_KEYS_URL, API_KEY_ENV, ApiKeyError, STDIO, apiKeyErrorMessage } from "./auth.js";
 import { UpstreamError, UpstreamResponseError, UpstreamTimeoutError } from "./upstream.js";
 
 // A type alias, not an interface: the MCP SDK's tool-result type carries an
@@ -85,13 +85,21 @@ export function isUnavailable(err: unknown): boolean {
   return err instanceof UpstreamTimeoutError || err instanceof UpstreamResponseError || err instanceof TypeError;
 }
 
+/** Where the key lives, in the words a developer would look for it: a header, or in local mode an environment variable. */
+const KEY_PLACE = STDIO
+  ? `the \`${API_KEY_ENV}\` environment variable this server was started with`
+  : "this server's `Authorization: Bearer <key>` header";
+const LIVE_KEY_FIX = STDIO
+  ? `set a live key (jbe_live_…) as \`${API_KEY_ENV}\` for the lookups`
+  : "put a live key (jbe_live_…) in this server's header for the lookups";
+
 function upstreamMessage(err: UpstreamError): string {
   const body = readUpstreamBody(err.message);
 
   if (err.status === 401) {
     return (
-      `The Jobo API rejected the API key${body.detail ? ` (${body.detail})` : ""}. Check the key in this server's ` +
-      `\`Authorization: Bearer <key>\` header: it may be revoked, expired or cut short. Keys are managed at ${API_KEYS_URL}.`
+      `The Jobo API rejected the API key${body.detail ? ` (${body.detail})` : ""}. Check the key in ` +
+      `${KEY_PLACE}: it may be revoked, expired or cut short. Keys are managed at ${API_KEYS_URL}.`
     );
   }
   if (err.status === 403) {
@@ -101,7 +109,7 @@ function upstreamMessage(err: UpstreamError): string {
     if (body.code === "not_available_in_sandbox") {
       return (
         "This lookup is not available with a sandbox key (jbe_test_…). The sandbox serves job search and lookups " +
-        "by id only; put a live key (jbe_live_…) in this server's header for the lookups. They are free."
+        `by id only; ${LIVE_KEY_FIX}. They are free.`
       );
     }
     return body.detail ?? "The Jobo API has no such lookup in this environment (occupations may not be published here).";

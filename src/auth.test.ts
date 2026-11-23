@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { API_KEYS_URL, ApiKeyError, apiKeyErrorMessage, apiKeyFromHeaders, resolveApiKey } from "./auth.js";
+import { API_KEYS_URL, ApiKeyError, apiKeyErrorMessage, apiKeyFromHeaders, callerApiKey, resolveApiKey } from "./auth.js";
 
 // The right shape (jbe_test_ + 21 + _ + 43 characters) and nothing else: no key was ever issued with this value.
 const KEY = `jbe_test_${"a".repeat(21)}_${"b".repeat(43)}`;
@@ -72,5 +72,36 @@ describe("apiKeyErrorMessage", () => {
     assert.ok(text.includes("is not a Jobo API key"));
     assert.ok(text.includes("unexpanded placeholder"));
     assert.ok(text.includes(API_KEYS_URL));
+  });
+});
+
+describe("local mode, where the key is an environment variable", () => {
+  it("takes the key from the environment and ignores a header", () => {
+    const before = process.env.JOBO_API_KEY;
+    process.env.JOBO_API_KEY = KEY;
+    try {
+      assert.equal(callerApiKey(undefined, true), KEY);
+      assert.equal(callerApiKey("a-header-value", true), KEY);
+      assert.equal(callerApiKey("a-header-value", false), "a-header-value", "over HTTP it is the header");
+    } finally {
+      if (before === undefined) delete process.env.JOBO_API_KEY;
+      else process.env.JOBO_API_KEY = before;
+    }
+  });
+
+  it("says which variable to set, and nothing about a header", () => {
+    const text = apiKeyErrorMessage(new ApiKeyError("missing"), "find_companies", ENDPOINT, true);
+    assert.ok(text.includes("This server was started without one."));
+    assert.ok(text.includes('"env": { "JOBO_API_KEY": "<your key>" }'));
+    assert.ok(!text.includes("Authorization"), "a local server has no header to set");
+    assert.ok(text.includes(API_KEYS_URL));
+    assert.ok(text.includes("`build_search_request`"), "names the tools that work without a key");
+  });
+
+  it("explains a malformed value as the variable's value, without repeating it", () => {
+    const text = apiKeyErrorMessage(new ApiKeyError("malformed"), "find_locations", ENDPOINT, true);
+    assert.ok(text.includes("the value of the JOBO_API_KEY environment variable is not a Jobo API key"));
+    assert.ok(text.includes("unexpanded placeholder"));
+    assert.ok(!text.includes("Authorization"));
   });
 });

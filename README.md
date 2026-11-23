@@ -34,7 +34,8 @@ Create a key at [enterprise.jobo.world/api-keys](https://enterprise.jobo.world/a
 there, so the key itself never lands in a file you might commit.
 
 The hosted server runs at `https://dev-mcp.jobo.world/mcp` (live since 2026-11-22). To run your own copy
-instead, see [Self-hosting](#self-hosting) and use `http://localhost:3003/mcp`. Every coding agent and IDE
+instead, see [Self-hosting](#self-hosting) and use `http://localhost:3003/mcp`, or
+[Local mode](#local-mode-stdio) for a client that starts the server itself. Every coding agent and IDE
 with a Jobo guide has its exact setup at `jobo.world/integrations/<client>`, or from `jobo mcp <client>`.
 
 ### Claude Code
@@ -226,6 +227,42 @@ same, and a `Dockerfile` is included.
 
 The requests `build_search_request` writes always point at the public API (`https://connect.jobo.world`),
 whatever `JOBO_API_URL` is, since that may be an internal address.
+
+## Local mode: stdio
+
+For a client that starts its MCP servers as child processes, and for directories that build a server and
+inspect it. `--stdio` serves the same six tools over stdin and stdout; nothing listens on a port. 0.2.0 is
+the first version with it.
+
+```json
+{
+  "mcpServers": {
+    "jobo-developer": {
+      "command": "npx",
+      "args": ["-y", "jobo-developer-mcp", "--stdio"],
+      "env": {
+        "JOBO_API_KEY": "<your key>"
+      }
+    }
+  }
+}
+```
+
+The key is the `JOBO_API_KEY` environment variable, not a header: there is no HTTP request to carry one.
+Leave it out and the server still starts and lists its tools. `list_filters`, `describe_search_filters` and
+`build_search_request` work as they are, and the three `find_` tools answer with a tool error that names the
+variable to set. `JOBO_API_URL` applies as it does when self-hosting; `PORT` and `MCP_PUBLIC_URL` do nothing
+here.
+
+From a checkout: `npm ci && npm run build && node dist/index.js --stdio`.
+
+## Directory files
+
+| File | For | What it is |
+| --- | --- | --- |
+| `server.json` | The MCP Registry | The manifest: the hosted endpoint, and the npm package's two ways to run (HTTP and `--stdio`). |
+| `glama.json` | Glama | Names the GitHub accounts that may manage a Glama listing of this repository, because it belongs to an organization. |
+| `llms-install.md` | Coding agents, Cline's marketplace | Install steps written for an agent to follow. |
 
 ## Development
 

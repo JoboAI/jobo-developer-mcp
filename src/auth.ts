@@ -12,6 +12,11 @@
  * the caller sent none. Those calls would then share one key's rate limit, so
  * that change wants a per-client limit in front of it.
  *
+ * In local mode (`--stdio`) there is no HTTP request and so no header: an MCP
+ * client starts the server as a child process, and the key is the
+ * `JOBO_API_KEY` environment variable it set for that process. `callerApiKey`
+ * is the one place that picks between the two.
+ *
  * Pure and dependency-light so the rules can be unit-tested without a socket.
  */
 
@@ -22,6 +27,9 @@ export const API_KEYS_URL = "https://enterprise.jobo.world/api-keys";
 
 /** The environment variable the setup snippets read the key from; `jobo-cli` reads the same one. */
 export const API_KEY_ENV = "JOBO_API_KEY";
+
+/** Local mode: MCP over stdin and stdout, started by the client as a child process. */
+export const STDIO = process.argv.includes("--stdio");
 
 type HeaderValue = string | string[] | undefined;
 
@@ -48,6 +56,14 @@ export function apiKeyFromHeaders(headers: { authorization?: HeaderValue; "x-api
     if (!bearer && !/\s/.test(authorization)) return authorization;
   }
   return first(headers["x-api-key"]);
+}
+
+/**
+ * What the caller supplied as its key, before any check: the request's header
+ * over HTTP, the process environment in local mode.
+ */
+export function callerApiKey(headerKey: string | undefined, local: boolean = STDIO): string | undefined {
+  return local ? process.env[API_KEY_ENV] : headerKey;
 }
 
 /** Why a live lookup could not get a key to run on. */
@@ -77,8 +93,16 @@ export function resolveApiKey(callerKey: string | undefined): string {
   return key;
 }
 
-/** How to add the key, for the two clients this server is mostly used from. */
-export function setupHint(endpointUrl: string): string {
+/** How to add the key: a header for the hosted server, an environment variable in local mode. */
+export function setupHint(endpointUrl: string, local: boolean = STDIO): string {
+  if (local) {
+    return [
+      `Set the ${API_KEY_ENV} environment variable for this server, in its entry in your MCP client config:`,
+      `  "env": { "${API_KEY_ENV}": "<your key>" }`,
+      "",
+      `Create a key at ${API_KEYS_URL} (live keys start with jbe_live_), then restart the server.`,
+    ].join("\n");
+  }
   return [
     "Add the key to this server's entry in your MCP client config as a header:",
     `  Authorization: Bearer <your key>`,
@@ -93,24 +117,37 @@ export function setupHint(endpointUrl: string): string {
 }
 
 /** Tool-error text for a lookup that had no usable key. Never echoes what was sent. */
-export function apiKeyErrorMessage(error: ApiKeyError, tool: string, endpointUrl: string): string {
+export function apiKeyErrorMessage(
+  error: ApiKeyError,
+  tool: string,
+  endpointUrl: string,
+  local: boolean = STDIO,
+): string {
   const keyless = "`list_filters`, `describe_search_filters` and `build_search_request` need no key and work as they are.";
   if (error.reason === "malformed") {
     return [
-      `\`${tool}\` was not run: the value this server received as the Jobo API key is not a Jobo API key.`,
-      "Keys start with jbe_live_ or jbe_test_ and are 74 characters long. If the header is written with an " +
-        `environment variable (\${${API_KEY_ENV}}), check that the variable is set where the MCP client starts ` +
-        "and that the client expands it; an unexpanded placeholder arrives here as plain text.",
+      local
+        ? `\`${tool}\` was not run: the value of the ${API_KEY_ENV} environment variable is not a Jobo API key.`
+        : `\`${tool}\` was not run: the value this server received as the Jobo API key is not a Jobo API key.`,
+      local
+        ? "Keys start with jbe_live_ or jbe_test_ and are 74 characters long. If the client config writes the value " +
+          `as a placeholder (\${${API_KEY_ENV}}), check that the client expands it; an unexpanded placeholder ` +
+          "arrives here as plain text."
+        : "Keys start with jbe_live_ or jbe_test_ and are 74 characters long. If the header is written with an " +
+          `environment variable (\${${API_KEY_ENV}}), check that the variable is set where the MCP client starts ` +
+          "and that the client expands it; an unexpanded placeholder arrives here as plain text.",
       "",
-      setupHint(endpointUrl),
+      setupHint(endpointUrl, local),
       "",
       keyless,
     ].join("\n");
   }
   return [
-    `\`${tool}\` calls the Jobo API and needs your Jobo API key. This request carried none.`,
+    local
+      ? `\`${tool}\` calls the Jobo API and needs your Jobo API key. This server was started without one.`
+      : `\`${tool}\` calls the Jobo API and needs your Jobo API key. This request carried none.`,
     "",
-    setupHint(endpointUrl),
+    setupHint(endpointUrl, local),
     "",
     keyless,
   ].join("\n");

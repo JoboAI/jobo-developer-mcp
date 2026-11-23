@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.2.0
+
+Local mode: run the server over stdio, with the key in an environment variable.
+
+### Added
+
+- **`--stdio`** serves MCP over stdin and stdout instead of HTTP, for clients that start a server as a
+  child process and for directories that build and inspect one. `npx jobo-developer-mcp --stdio`.
+- **The key comes from `JOBO_API_KEY` in local mode.** There is no HTTP request, so no header. Without it
+  the server starts, lists its six tools and answers the three contract tools; the three `find_` tools say
+  which variable to set.
+- `server.json` lists the stdio way of running the package next to the HTTP one.
+- `glama.json` and `llms-install.md`, for directories that read a repository.
+
+### Changed
+
+- In local mode the tool descriptions, the server instructions and the key errors name the environment
+  variable instead of the `Authorization` header, and requests to the Jobo API carry `(stdio)` in the
+  `User-Agent`.
+
+Nothing changes for the hosted server or for `npx jobo-developer-mcp` without the flag.
+
 ## 0.1.0
 
 First version. A developer-facing MCP server: reference lookups for writing code against the Jobo REST

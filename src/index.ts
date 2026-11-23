@@ -13,6 +13,11 @@
  * stateless, both protocol eras. The difference is auth. There is no OAuth
  * here: a developer already holds an API key, and a coding agent or a CI job
  * sets a static header far more easily than it completes a browser sign-in.
+ *
+ * Local mode: `--stdio` serves the same six tools over stdin and stdout, for a
+ * client that starts the server as a child process and for a directory that
+ * builds and inspects one. The key is then the `JOBO_API_KEY` environment
+ * variable; nothing listens on a port.
  */
 
 import { createHash } from "node:crypto";
@@ -21,8 +26,9 @@ import express from "express";
 import { toNodeHandler } from "@modelcontextprotocol/node";
 import { createMcpHandler } from "@modelcontextprotocol/server";
 import type { AuthInfo } from "@modelcontextprotocol/server";
+import { serveStdio } from "@modelcontextprotocol/server/stdio";
 
-import { apiKeyFromHeaders } from "./auth.js";
+import { API_KEY_ENV, STDIO, apiKeyFromHeaders } from "./auth.js";
 import {
   ENDPOINT_URL,
   PORT,
@@ -156,8 +162,19 @@ app.all("/mcp", attachApiKey, (req, res) => {
   void handleMcp(req, res, req.body);
 });
 
-// Skipped under test, which imports `app` directly.
-if (process.env.NODE_ENV !== "test") {
+// Local mode. stdout carries the protocol, so the one start-up line goes to
+// stderr, where a client shows it in its server log.
+if (STDIO) {
+  serveStdio(buildServer, { onerror: (err) => console.error("MCP request handling failed:", err) });
+  console.error(
+    `Jobo developer MCP server on stdio (${
+      process.env[API_KEY_ENV]?.trim() ? "API key set" : `no ${API_KEY_ENV}: the three find_ tools will ask for one`
+    }).`,
+  );
+}
+
+// Skipped under test, which imports `app` directly, and in local mode.
+if (!STDIO && process.env.NODE_ENV !== "test") {
   app.listen(PORT, () => {
     console.log(`Jobo developer MCP server listening on :${PORT}`);
     console.log(`  Public URL:    ${PUBLIC_URL}`);

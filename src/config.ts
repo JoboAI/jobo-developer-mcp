@@ -8,6 +8,8 @@
 
 import { SUPPORTED_PROTOCOL_VERSIONS } from "@modelcontextprotocol/server";
 
+import { STDIO } from "./auth.js";
+
 /**
  * The public base URL, used in the Server Card and in the setup snippet a tool
  * prints when the API key is missing. Set it to whatever host actually serves
@@ -18,7 +20,7 @@ export const ENDPOINT_URL = `${PUBLIC_URL}/mcp`;
 export const PORT = Number(process.env.PORT ?? 3003);
 
 export const SERVER_NAME = "jobo-developer";
-export const SERVER_VERSION = "0.1.0";
+export const SERVER_VERSION = "0.2.0";
 export const REGISTRY_NAME = "world.jobo/developer";
 export const SERVER_TITLE = "Jobo Developer";
 export const SERVER_DESCRIPTION =
@@ -29,8 +31,8 @@ export const SERVER_ICONS = [
   { src: "https://jobo.world/favicon.svg", mimeType: "image/svg+xml", sizes: ["any"] },
 ];
 
-/** Sent upstream as `User-Agent`. */
-export const USER_AGENT = `jobo-developer-mcp/${SERVER_VERSION}`;
+/** Sent upstream as `User-Agent`. Local mode says so, to tell the two apart in the API's logs. */
+export const USER_AGENT = `jobo-developer-mcp/${SERVER_VERSION}${STDIO ? " (stdio)" : ""}`;
 
 /** The job-search server: where an assistant searches jobs. Named in the instructions so an agent does not look for search here. */
 export const JOB_SEARCH_MCP_URL = "https://jobs-mcp.jobo.world/mcp";

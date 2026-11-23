@@ -25,7 +25,7 @@ import {
 } from "@jobo-ai/connector-core";
 import { z } from "zod";
 
-import { API_KEYS_URL, API_KEY_ENV, resolveApiKey } from "./auth.js";
+import { API_KEYS_URL, API_KEY_ENV, STDIO, callerApiKey, resolveApiKey } from "./auth.js";
 import {
   ENDPOINT_URL,
   JOB_SEARCH_MCP_URL,
@@ -108,8 +108,11 @@ export const SERVER_INSTRUCTIONS =
   "`build_search_request` never sends the request. Do not run the curl or CLI command it returns unless the " +
   "user wants the search run, and keep `page_size` small while testing; a sandbox key (jbe_test_…) runs search " +
   "against fictional jobs at no charge.\n\n" +
-  "The key: the three `find_` tools call the Jobo API with the developer's own API key, sent by the MCP client " +
-  "as `Authorization: Bearer <key>` in this server's config. The other three need no key. Keys are created at " +
+  "The key: the three `find_` tools call the Jobo API with the developer's own API key, " +
+  (STDIO
+    ? `read from the \`${API_KEY_ENV}\` environment variable this server was started with. `
+    : "sent by the MCP client as `Authorization: Bearer <key>` in this server's config. ") +
+  "The other three need no key. Keys are created at " +
   `${API_KEYS_URL}. Never write a key into source files: read it from the \`${API_KEY_ENV}\` environment variable.`;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -138,15 +141,17 @@ function lookup<T>(tool: ToolName, endpoint: FreeEndpoint, ctx: Ctx, options: Ca
   if (!(TOOL_CATALOG[tool].upstream as readonly FreeEndpoint[]).includes(endpoint)) {
     throw new Error(`${tool} is not declared to call ${endpoint}`);
   }
-  const apiKey = resolveApiKey(ctx.http?.authInfo?.token);
+  const apiKey = resolveApiKey(callerApiKey(ctx.http?.authInfo?.token));
   return callApi<T>(endpoint, apiKey, { ...options, userAgent: USER_AGENT });
 }
 
 const failure = (tool: ToolName) => (err: unknown) => toToolError(err, { tool, endpointUrl: ENDPOINT_URL });
 
 const KEYED =
-  "Needs the Jobo API key in this server's `Authorization: Bearer` header; a sandbox key (jbe_test_…) cannot use " +
-  "it. Free: rate limited, never billed.";
+  (STDIO
+    ? `Needs the Jobo API key in the \`${API_KEY_ENV}\` environment variable; `
+    : "Needs the Jobo API key in this server's `Authorization: Bearer` header; ") +
+  "a sandbox key (jbe_test_…) cannot use it. Free: rate limited, never billed.";
 const KEYLESS = "No API key and no network call: it answers from the filter contract this server ships with.";
 
 // ─────────────────────────────────────────────────────────────────────────────

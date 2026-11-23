@@ -368,12 +368,21 @@ describe("the developer MCP server", () => {
       // The registry reads `mcpName` from the published tarball and refuses a
       // manifest whose name, package or version disagrees with it.
       assert.equal(pkg.private, undefined, "a private package cannot be published");
-      assert.equal(manifest.packages.length, 1);
-      const [entry] = manifest.packages;
-      assert.equal(entry.registryType, "npm");
-      assert.equal(entry.identifier, pkg.name);
-      assert.equal(entry.version, pkg.version);
+      // Two ways to run the one package: the HTTP server, and local mode over stdio.
+      assert.equal(manifest.packages.length, 2);
+      const [entry, local] = manifest.packages;
+      for (const packaged of manifest.packages) {
+        assert.equal(packaged.registryType, "npm");
+        assert.equal(packaged.identifier, pkg.name);
+        assert.equal(packaged.version, pkg.version);
+      }
       assert.deepEqual(entry.transport, { type: "streamable-http", url: "http://localhost:3003/mcp" });
+      assert.deepEqual(local.transport, { type: "stdio" });
+      assert.deepEqual(local.packageArguments.map((argument: { name: string }) => argument.name), ["--stdio"]);
+      const [key] = local.environmentVariables;
+      assert.equal(key.name, "JOBO_API_KEY");
+      assert.equal(key.isSecret, true);
+      assert.equal(key.isRequired, false, "three of the six tools work without it");
       // `npx jobo-developer-mcp` has to start the server.
       assert.deepEqual(pkg.bin, { [pkg.name]: "dist/index.js" });
       assert.ok(pkg.files.includes("dist"));
