@@ -20,7 +20,7 @@ export const ENDPOINT_URL = `${PUBLIC_URL}/mcp`;
 export const PORT = Number(process.env.PORT ?? 3003);
 
 export const SERVER_NAME = "jobo-developer";
-export const SERVER_VERSION = "0.2.1";
+export const SERVER_VERSION = "0.3.0";
 export const REGISTRY_NAME = "world.jobo/developer";
 export const SERVER_TITLE = "Jobo Developer";
 export const SERVER_DESCRIPTION =

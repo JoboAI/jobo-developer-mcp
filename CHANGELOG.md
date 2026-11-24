@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.3.0
+
+Hiring Signals: two tools that describe and write the requests for `GET /api/signals` and
+`GET /api/companies/{id}/signals`. Neither sends them, and no tool on this server can.
+
+### Added
+
+- **`describe_signal_filters`** (no key): every signals filter with its type, values or range and what it
+  matches; which filters the per-company endpoint takes; the focus-filter rule (a signal is returned when it
+  agrees with every focus filter its type carries, and its type carries at least one of those set); paging;
+  what a read costs; and how to poll for new signals with `created_after` without paying twice for more than
+  a five-minute overlap.
+- **`build_signals_request`** (no key): checks a set of signals filters, an optional `company_id`, `limit`
+  and `cursor`, and returns the `GET` request, a `curl` command, a PowerShell command and a `jobo signals`
+  command. It refuses an unknown filter, a value outside `types`, `seniority` or `company_sizes`, a list
+  value with a comma, more than 100 values, a number out of range, a date in the wrong shape, and, with
+  `company_id`, each filter the per-company endpoint does not take, by name. The result gives `limit` as the
+  most the request can bill.
+
+### Changed
+
+- **The billed-endpoint guard covers signals.** `/api/signals` and `/api/companies/{id}/signals` are billed
+  paths: every signal returned costs ten times a job, and a signal read again is billed again. A test fails
+  if either is ever reachable from this server.
+- **The server instructions** name the two signals tools and say what a signal read costs.
+
+The pinned `@jobo-ai/connector-core` (0.5.0) has no signals. `src/signals-contract.ts` holds a copy of
+core's signals filters and type labels until core 0.7.0 is on npm; a test fails when the copy drifts from
+`contracts/signals.json`.
+
 ## 0.2.1
 
 Fixes from a code review: refused keys, the caller's address, and the request `build_search_request` writes.

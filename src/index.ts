@@ -14,7 +14,7 @@
  * here: a developer already holds an API key, and a coding agent or a CI job
  * sets a static header far more easily than it completes a browser sign-in.
  *
- * Local mode: `--stdio` serves the same six tools over stdin and stdout, for a
+ * Local mode: `--stdio` serves the same eight tools over stdin and stdout, for a
  * client that starts the server as a child process and for a directory that
  * builds and inspects one. The key is then the `JOBO_API_KEY` environment
  * variable; nothing listens on a port.
@@ -187,7 +187,10 @@ if (!STDIO && process.env.NODE_ENV !== "test") {
     console.log(`  Public URL:    ${PUBLIC_URL}`);
     console.log(`  Upstream API:  ${apiBaseUrl()}`);
     console.log("  Auth:          the caller's Jobo API key (Authorization: Bearer), forwarded as X-Api-Key");
-    console.log("  Without a key: handshake, tools/list, list_filters, describe_search_filters, build_search_request");
+    console.log(
+      "  Without a key: handshake, tools/list, list_filters, describe_search_filters, build_search_request, " +
+        "describe_signal_filters, build_signals_request",
+    );
     console.log(`  Server card:   ${serverCardUrl(ENDPOINT_URL)}`);
   });
 }

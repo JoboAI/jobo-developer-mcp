@@ -3,13 +3,14 @@
 Remote MCP server for people writing code against the Jobo REST API. It sits in a coding agent (Claude
 Code, Cursor and the like) and answers the questions an integration raises: which company id, which
 occupation id, which exact filter value, which field of the request body. It can check a set of filters and
-write out the request for them. It never runs a job search.
+write out the request for them, for job search and for Hiring Signals. It never runs a job search and never
+reads a signal.
 
 - **Transport:** Streamable HTTP, single `/mcp` endpoint, stateless. Serves MCP spec **2026-07-28** natively
   and every 2025-era client through the built-in legacy fallback (SDK v2 `createMcpHandler`, one factory
   for both eras). Same stack as the job-search server in `../mcp`.
 - **Auth:** your Jobo API key, sent by the MCP client as `Authorization: Bearer <key>`. No OAuth, no
-  sign-in. Three of the six tools need no key at all.
+  sign-in. Five of the eight tools need no key at all.
 - **Cost:** every tool is free. None calls a billed endpoint, and a test fails if one ever does.
 
 ## Which Jobo MCP server is this?
@@ -88,16 +89,16 @@ Point it at `https://dev-mcp.jobo.world/mcp` over Streamable HTTP and set one st
 
 ### Without a key
 
-Leave the header out and the server still connects. `list_filters`, `describe_search_filters` and
-`build_search_request` work as they are; the three `find_` tools answer with a tool error that shows the
-header to add and where to create a key.
+Leave the header out and the server still connects. `list_filters`, `describe_search_filters`,
+`build_search_request`, `describe_signal_filters` and `build_signals_request` work as they are; the three
+`find_` tools answer with a tool error that shows the header to add and where to create a key.
 
 If a lookup says the value it received "is not a Jobo API key", the client most likely sent the
 placeholder as text: check that `JOBO_API_KEY` is set in the environment the client starts from.
 
 ## Tools
 
-All six are read-only.
+All eight are read-only.
 
 | Tool | Key | What it returns |
 | --- | --- | --- |
@@ -107,8 +108,11 @@ All six are read-only.
 | `list_filters` | no | The fixed vocabularies: work models, employment types, experience levels, company categories, languages, sort orders, description formats, `include_fields`, and the feed's company size and revenue bands. |
 | `describe_search_filters` | no | The whole job-search filter contract: each filter's name, type, accepted values or lookup tool, `exclude_` twin, where it goes in the `POST /api/jobs/search` body (with an example), and its `jobo` CLI flag. |
 | `build_search_request` | no | A set of filters, checked against the contract → the exact request (method, URL, headers, JSON body), a `curl` command, a PowerShell command and a `jobo` CLI command. **It does not send the request.** |
+| `describe_signal_filters` | no | The Hiring Signals contract for `GET /api/signals` and `GET /api/companies/{id}/signals`: each filter's type, values or range and what it matches, which filters the per-company endpoint takes, the focus-filter rule, paging, what a read costs, and how to poll for new signals. |
+| `build_signals_request` | no | A set of signals filters, checked against that contract → the `GET` request (URL with its query string, headers), a `curl` command, a PowerShell command and a `jobo signals` command. **It does not send the request.** |
 
 A sandbox key (`jbe_test_…`) cannot use the lookups: the sandbox serves job search and lookups by id only.
+It cannot read signals either.
 
 ### Occupations by name
 
@@ -152,6 +156,36 @@ in ASCII, so 5.1's string encoding cannot change it. In `request.headers` the ke
 value to paste. The result also states the most the request can bill, which is `page_size` jobs, and no
 price: the rate depends on the account.
 
+### Hiring Signals
+
+A signal is one event at one company, detected from its job postings: a hiring surge, a first job in a
+country, a leadership search, a new technology, a slowdown. `describe_signal_filters` and
+`build_signals_request` cover the two endpoints that read them. Neither calls them, and nothing on this
+server can (see [the billed-endpoint guard](#the-billed-endpoint-guard)).
+
+`build_signals_request` takes the filter names as the API spells them (`types`, `domains`, `job_regions`),
+plus `company_id`, `limit` and `cursor`. Lists are arrays; the tool joins them with commas. It refuses, with
+a message that says what to send instead:
+
+- an unknown filter (`type` names `types`, `q` names `roles`, `location` names the job and headquarters
+  location filters);
+- a value outside `types`, `seniority` or `company_sizes`, with the nearest valid one;
+- a list value that contains a comma (the API would read it as two), or more than 100 values;
+- a number out of range (`min_strength` 1 to 100, `limit` 1 to 200 and so on), a day that is not
+  `yyyy-MM-dd`, and a `created_after` without a time and seconds, which the API refuses too;
+- with `company_id`, every filter `GET /api/companies/{id}/signals` does not take, by name. That endpoint
+  takes only `types`, `min_strength`, `detected_after`, `detected_before` and `created_after`, and ignores
+  anything else without an error.
+
+It warns on a read with no narrowing filter, and its notes state the focus-filter rule when a focus filter is
+set, how to poll with `created_after`, and that a request whose answer was lost must not be sent again. The
+result gives `limit` as the most the request can bill, and no price: a signal costs ten times a job on the
+account's own pricing, and a signal read again is billed again.
+
+The signals contract is not in the pinned `@jobo-ai/connector-core` (0.5.0). `src/signals-contract.ts` holds
+a copy of core's filter list and type labels, with their wording, until core 0.7.0 is on npm; its test fails
+when the copy drifts from `../contracts/signals.json`.
+
 ## What costs money
 
 Nothing on this server. In the API it describes:
@@ -161,12 +195,13 @@ Nothing on this server. In the API it describes:
 | Job search: `GET /api/jobs`, `POST /api/jobs/search` | Every job returned, after the plan's included jobs, at the account's pay-as-you-go rate. An empty page is free. |
 | Feed: `POST /api/jobs/feed` | Every job that is new to the account, at the same rate. |
 | Geocoding: `GET /api/locations/geocode` | Per lookup. |
+| Hiring Signals: `GET /api/signals`, `GET /api/companies/{id}/signals` | Every signal returned, at ten times the price of a job: the plan's included signals first, then the wallet. No per-signal charge on Unlimited. A request that returns nothing is free; a signal read again is billed again. |
 | Lookups by id, and the endpoints behind this server's tools | Free. |
 
 The current published rates are on [Billing](https://jobo.world/docs/billing). The server writes no price
 into its instructions or results: the API charges by the account's pricing and plan, which it cannot see.
 The server's instructions tell the agent the same, and tell it not to run a command `build_search_request`
-returns unless the user wants the search run.
+or `build_signals_request` returns unless the user wants it run.
 
 ### The billed-endpoint guard
 
@@ -179,14 +214,14 @@ A tool here cannot name an upstream path. It names one of four entries in `FREE_
 | `find_filter_values` | `GET /api/connectors/filter-options/{facet}`, and `GET /api/occupations` for an occupation name |
 | `find_locations` | `GET /api/connectors/locations/suggest` |
 
-Three checks keep it that way: `upstream.test.ts` fails if `FREE_ENDPOINTS` holds a search, feed or
-geocode path; `server.test.ts` calls every tool in `tools/list` against a stub API and fails if any
+Three checks keep it that way: `upstream.test.ts` fails if `FREE_ENDPOINTS` holds a search, feed,
+geocode or signals path; `server.test.ts` calls every tool in `tools/list` against a stub API and fails if any
 request is billed, is not a `GET`, or goes somewhere the tool did not declare (and fails if a new tool is
 not in that test); and `callApi` refuses a billed path at run time.
 
 ## Auth model
 
-There is no gate on `/mcp`. The handshake, `tools/list` and the three contract tools are the same for
+There is no gate on `/mcp`. The handshake, `tools/list` and the five contract tools are the same for
 every caller and touch no upstream, so they are answered without a key.
 
 A lookup that needs the key and gets none returns a tool error, not an HTTP `401`: a `401` makes an MCP
@@ -240,13 +275,13 @@ same, and a `Dockerfile` is included.
 | `MCP_PUBLIC_URL` | `https://dev-mcp.jobo.world` | The public base URL, used in the Server Card and in the setup snippet the missing-key error prints. |
 | `PORT` | `3003` | The job-search server uses 3002, the analytics server 3001. |
 
-The requests `build_search_request` writes always point at the public API (`https://connect.jobo.world`),
+The requests `build_search_request` and `build_signals_request` write always point at the public API (`https://connect.jobo.world`),
 whatever `JOBO_API_URL` is, since that may be an internal address.
 
 ## Local mode: stdio
 
 For a client that starts its MCP servers as child processes, and for directories that build a server and
-inspect it. `--stdio` serves the same six tools over stdin and stdout; nothing listens on a port. 0.2.0 is
+inspect it. `--stdio` serves the same eight tools over stdin and stdout; nothing listens on a port. 0.2.0 is
 the first version with it.
 
 ```json
@@ -264,8 +299,9 @@ the first version with it.
 ```
 
 The key is the `JOBO_API_KEY` environment variable, not a header: there is no HTTP request to carry one.
-Leave it out and the server still starts and lists its tools. `list_filters`, `describe_search_filters` and
-`build_search_request` work as they are, and the three `find_` tools answer with a tool error that names the
+Leave it out and the server still starts and lists its tools. The five contract tools (`list_filters`,
+`describe_search_filters`, `build_search_request`, `describe_signal_filters`, `build_signals_request`) work
+as they are, and the three `find_` tools answer with a tool error that names the
 variable to set. `JOBO_API_URL` applies as it does when self-hosting; `PORT` and `MCP_PUBLIC_URL` do nothing
 here.
 
@@ -297,11 +333,13 @@ a stub of the Jobo API, and refuses to start if the upstream is anything but tha
 | File | What it holds |
 | --- | --- |
 | `src/index.ts` | The HTTP app: `/mcp`, the Server Card, the AI Catalog, `/health`. |
-| `src/server.ts` | The six tools, `TOOL_CATALOG`, the server instructions. |
+| `src/server.ts` | The eight tools, `TOOL_CATALOG`, the server instructions. |
 | `src/auth.ts` | The API-key seam: reading the header, `resolveApiKey`, the missing-key text. |
 | `src/upstream.ts` | `FREE_ENDPOINTS`, the billed-path list, the one function that calls the API. |
 | `src/contract.ts` | The filter contract read for a developer: descriptions, body fields, fixed vocabularies. |
 | `src/request.ts` | `build_search_request`: validation, the body, `curl` and the CLI command. |
+| `src/signals-contract.ts` | The Hiring Signals contract: a copy of core's filter list and type labels, and the rules in words. |
+| `src/signals-request.ts` | `build_signals_request`: validation, the query string, the commands. |
 | `src/format.ts` | Tool output as text. |
 | `src/discovery.ts` | Server Card and AI Catalog. |
 

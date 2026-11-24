@@ -123,7 +123,9 @@ export function apiKeyErrorMessage(
   endpointUrl: string,
   local: boolean = STDIO,
 ): string {
-  const keyless = "`list_filters`, `describe_search_filters` and `build_search_request` need no key and work as they are.";
+  const keyless =
+    "`list_filters`, `describe_search_filters`, `build_search_request`, `describe_signal_filters` and " +
+    "`build_signals_request` need no key and work as they are.";
   if (error.reason === "malformed") {
     return [
       local

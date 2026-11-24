@@ -44,6 +44,22 @@ describe("isBilledPath", () => {
     }
   });
 
+  // Every signal returned is billed, at ten times a job: this server must never read one.
+  it("knows both Hiring Signals endpoints", () => {
+    for (const path of [
+      "/api/signals",
+      "/api/signals/",
+      "/api/signals?types=hiring_surge&limit=5",
+      "/API/Signals",
+      "/api/companies/6c1f0a9e-3b7d-4c55-8e21-5a4d9f0b7c33/signals",
+      "/api/companies/6c1f0a9e-3b7d-4c55-8e21-5a4d9f0b7c33/signals?min_strength=50",
+      "/api/companies/{id}/signals",
+    ]) {
+      assert.equal(isBilledPath(path), true, path);
+    }
+    assert.equal(isBilledPath("/api/companies/6c1f0a9e-3b7d-4c55-8e21-5a4d9f0b7c33"), false, "a company by id is free");
+  });
+
   it("leaves the free lookups alone", () => {
     for (const path of [
       "/api/connectors/companies/suggest?q=stripe",
@@ -64,6 +80,10 @@ describe("FREE_ENDPOINTS, every path this server can call", () => {
       assert.equal(isBilledPath(template), false, `${name} (${template}) is a billed endpoint`);
       assert.equal(isBilledPath(template.replace("{facet}", "skills")), false, name);
     }
+  });
+
+  it("holds neither signals endpoint", () => {
+    for (const template of Object.values(FREE_ENDPOINTS)) assert.ok(!template.includes("signals"), template);
   });
 
   it("is the four free lookups jobo-cli uses, and nothing else", () => {

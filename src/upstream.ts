@@ -6,7 +6,7 @@
  * limited and none is billed.
  *
  * A tool cannot name a path: it names one of `FREE_ENDPOINTS`, and `callApi`
- * builds the URL from that. Reaching a billed endpoint (search, feed, geocode)
+ * builds the URL from that. Reaching a billed endpoint (search, feed, geocode, signals)
  * therefore takes a new entry in this file, where `upstream.test.ts` fails it.
  */
 
@@ -40,7 +40,8 @@ export type FreeEndpoint = keyof typeof FREE_ENDPOINTS;
 
 /**
  * Paths that cost money: job search (billed per job returned), the feed (per
- * new job) and the geocoder (per lookup). Nothing in this server may call one.
+ * new job), the geocoder (per lookup) and Hiring Signals (per signal returned,
+ * at ten times a job). Nothing in this server may call one.
  */
 export const BILLED_PATHS: readonly RegExp[] = [
   /^\/api\/jobs\/?$/, // GET /api/jobs
@@ -48,6 +49,8 @@ export const BILLED_PATHS: readonly RegExp[] = [
   /^\/api\/jobs\/feed(\/|$)/, // POST /api/jobs/feed, saved and managed feeds
   /^\/api\/locations\/geocode(\/|$)/, // GET /api/locations/geocode
   /^\/api\/mcp\/jobs\/search(\/|$)/, // the job-search server's own search
+  /^\/api\/signals(\/|$)/, // GET /api/signals
+  /^\/api\/companies\/[^/]+\/signals(\/|$)/, // GET /api/companies/{id}/signals
 ];
 
 /** Whether a path (with or without a query string) is a billed endpoint. */

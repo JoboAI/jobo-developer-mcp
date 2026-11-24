@@ -28,6 +28,8 @@ import {
   type Vocabulary,
 } from "./contract.js";
 import type { BuildResult, Finding } from "./request.js";
+import type { SignalFilterContract, SignalFilterDescription } from "./signals-contract.js";
+import type { SignalsBuildResult } from "./signals-request.js";
 
 const count = (value: number): string => value.toLocaleString("en-US");
 const plural = (n: number, one: string, many: string): string => (n === 1 ? one : many);
@@ -337,6 +339,82 @@ export function renderBuildResult(result: BuildResult): string {
       : `jobo CLI: ${result.cli_note ?? "not available for this request."}`,
     ...(result.warnings.length > 0 ? ["Check before relying on it:", findings(result.warnings)] : []),
     result.billing?.note ?? "",
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  describe_signal_filters
+// ─────────────────────────────────────────────────────────────────────────────
+
+function signalFilterBlock(filter: SignalFilterDescription): string {
+  const lines = [`### ${filter.name}`, filter.description, `- type: ${filter.value}`];
+  if (filter.values) lines.push(`- values: ${filter.values.join(", ")}`);
+  if (filter.min !== undefined && filter.max !== undefined) lines.push(`- range: ${filter.min} to ${filter.max}`);
+  const marks = [
+    filter.narrowing ? "narrowing" : "",
+    filter.focus ? "focus filter" : "",
+    filter.per_company ? "also on the per-company endpoint" : "list endpoint only",
+  ].filter(Boolean);
+  lines.push(`- ${marks.join("; ")}`);
+  lines.push(`- CLI: \`${filter.cli_flag}\``);
+  return lines.join("\n");
+}
+
+export function renderSignalFilterContract(contract: SignalFilterContract): string {
+  const { list, company } = contract.endpoints;
+  return [
+    `# Hiring Signals filters: ${list.method} ${list.url}`,
+    `One company: ${company.method} ${company.url}, taking only ${(company.takes as readonly string[]).join(", ")}. ` +
+      `Auth: the API key in the \`${contract.auth_header}\` header. The names below are the query parameters and what ` +
+      "`build_signals_request` takes.",
+    contract.notes.map((note) => `- ${note}`).join("\n"),
+    "## What it costs",
+    contract.billing,
+    "## The focus filters",
+    contract.focus_rule,
+    "## Paging",
+    contract.paging.rule,
+    "## Reading only what is new",
+    contract.polling,
+    "## Types",
+    contract.types.map((entry) => `- ${entry.type}: ${entry.label}`).join("\n"),
+    `## Filters (${contract.filters.length})`,
+    contract.filters.map(signalFilterBlock).join("\n\n"),
+  ].join("\n\n");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  build_signals_request
+// ─────────────────────────────────────────────────────────────────────────────
+
+export function renderSignalsBuildResult(result: SignalsBuildResult): string {
+  if (!result.valid || !result.request) {
+    const n = result.errors.length;
+    return [
+      `No request was built: ${n} ${plural(n, "problem", "problems")} to fix first.`,
+      findings(result.errors),
+      ...(result.warnings.length > 0 ? ["Also worth checking:", findings(result.warnings)] : []),
+      "`describe_signal_filters` lists every filter name, type and accepted value.",
+    ].join("\n\n");
+  }
+
+  const { request } = result;
+  return [
+    "Request built and checked against the Hiring Signals contract. Nothing was sent.",
+    `${request.method} ${request.url}\nX-Api-Key: <your key>\n\n` +
+      "In code, read the key from the JOBO_API_KEY environment variable (process.env.JOBO_API_KEY in Node, " +
+      "os.environ[\"JOBO_API_KEY\"] in Python); never write it into the source.",
+    "Query parameters:\n```json\n" + JSON.stringify(request.query, null, 2) + "\n```",
+    "curl (bash, zsh; reads the key from the JOBO_API_KEY environment variable):\n```bash\n" + (result.curl ?? "") + "\n```",
+    ...(result.powershell
+      ? ["PowerShell (reads the key from the same variable, as $env:JOBO_API_KEY):\n```powershell\n" + result.powershell + "\n```"]
+      : []),
+    ...(result.cli ? ["jobo CLI (`npm install -g jobo-cli`; reads the same variable):\n```bash\n" + result.cli + "\n```"] : []),
+    ...(result.warnings.length > 0 ? ["Check before relying on it:", findings(result.warnings)] : []),
+    result.billing?.note ?? "",
+    ...(result.notes && result.notes.length > 0 ? ["Notes:", result.notes.map((note) => `- ${note}`).join("\n")] : []),
   ]
     .filter(Boolean)
     .join("\n\n");

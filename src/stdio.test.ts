@@ -146,10 +146,16 @@ describe("local mode over stdio", () => {
 
     assert.equal((opened.result?.serverInfo as { name: string }).name, "jobo-developer");
     const tools = listed.result?.tools as Array<{ name: string; description: string }>;
-    assert.deepEqual(
-      tools.map((tool) => tool.name).sort(),
-      ["build_search_request", "describe_search_filters", "find_companies", "find_filter_values", "find_locations", "list_filters"],
-    );
+    assert.deepEqual(tools.map((tool) => tool.name).sort(), [
+      "build_search_request",
+      "build_signals_request",
+      "describe_search_filters",
+      "describe_signal_filters",
+      "find_companies",
+      "find_filter_values",
+      "find_locations",
+      "list_filters",
+    ]);
     // The hosted server takes the key as a header. Here it is an environment variable, and the tools say so.
     const keyed = tools.find((tool) => tool.name === "find_companies")!;
     assert.match(keyed.description, /JOBO_API_KEY/);
@@ -162,12 +168,14 @@ describe("local mode over stdio", () => {
     const session = start({});
     await session.open();
 
-    for (const tool of ["list_filters", "describe_search_filters"]) {
+    for (const tool of ["list_filters", "describe_search_filters", "describe_signal_filters"]) {
       const reply = await session.call(tool);
       assert.notEqual(reply.result?.isError, true, `${tool}: ${textOf(reply)}`);
     }
     const built = await session.call("build_search_request", { q: "nurse" });
     assert.notEqual(built.result?.isError, true, textOf(built));
+    const signals = await session.call("build_signals_request", { domains: ["stripe.com"], limit: 5 });
+    assert.notEqual(signals.result?.isError, true, textOf(signals));
 
     assert.equal(seen.length, 0, "the contract tools touch no upstream");
   });

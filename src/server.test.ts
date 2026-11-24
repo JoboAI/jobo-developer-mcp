@@ -215,6 +215,11 @@ describe("the developer MCP server", () => {
     list_filters: [{}],
     describe_search_filters: [{}],
     build_search_request: [{ q: "nurse", location: "Berlin, Germany", work_model: ["remote"], page_size: 5 }],
+    describe_signal_filters: [{}],
+    build_signals_request: [
+      { types: ["hiring_surge"], domains: ["stripe.com"], limit: 10 },
+      { company_id: "6c1f0a9e-3b7d-4c55-8e21-5a4d9f0b7c33", min_strength: 50 },
+    ],
   };
 
   // ── Discovery ──────────────────────────────────────────────────────────────
@@ -230,14 +235,20 @@ describe("the developer MCP server", () => {
       assert.equal(result._meta["io.modelcontextprotocol/serverInfo"].name, "jobo-developer");
     });
 
-    it("answers tools/list with the six tools, each saying whether it needs the key", async () => {
+    it("answers tools/list with the eight tools, each saying whether it needs the key", async () => {
       const res = await modern("tools/list");
       assert.equal(res.status, 200);
       const { result } = await rpc(res);
-      assert.deepEqual(
-        result.tools.map((tool: { name: string }) => tool.name).sort(),
-        ["build_search_request", "describe_search_filters", "find_companies", "find_filter_values", "find_locations", "list_filters"],
-      );
+      assert.deepEqual(result.tools.map((tool: { name: string }) => tool.name).sort(), [
+        "build_search_request",
+        "build_signals_request",
+        "describe_search_filters",
+        "describe_signal_filters",
+        "find_companies",
+        "find_filter_values",
+        "find_locations",
+        "list_filters",
+      ]);
       for (const tool of result.tools) {
         assert.equal(tool.inputSchema.type, "object", tool.name);
         assert.equal(tool.annotations.readOnlyHint, true, `${tool.name} must be read-only`);
@@ -290,7 +301,17 @@ describe("the developer MCP server", () => {
       assert.equal(init.status, 200);
       const { result } = await rpc(init);
       assert.equal(result.serverInfo.name, "jobo-developer");
-      for (const phrase of ["It does not search jobs", "jobs-mcp.jobo.world", "billed per job returned", "/api/locations/geocode", "Authorization: Bearer"]) {
+      for (const phrase of [
+        "It does not search jobs",
+        "jobs-mcp.jobo.world",
+        "billed per job returned",
+        "/api/locations/geocode",
+        "Authorization: Bearer",
+        "`describe_signal_filters`",
+        "ten times the price of a job",
+        "a signal read again is billed again",
+        "no tool here reads signals",
+      ]) {
         assert.ok(result.instructions.includes(phrase), `instructions should mention: ${phrase}`);
       }
 
@@ -298,7 +319,7 @@ describe("the developer MCP server", () => {
 
       const list = await legacy({ jsonrpc: "2.0", id: 2, method: "tools/list" });
       assert.equal(list.status, 200);
-      assert.equal((await rpc(list)).result.tools.length, 6);
+      assert.equal((await rpc(list)).result.tools.length, 8);
     });
 
     it("has no OAuth: no challenge anywhere, and no protected-resource metadata", async () => {
@@ -384,7 +405,7 @@ describe("the developer MCP server", () => {
       const [key] = local.environmentVariables;
       assert.equal(key.name, "JOBO_API_KEY");
       assert.equal(key.isSecret, true);
-      assert.equal(key.isRequired, false, "three of the six tools work without it");
+      assert.equal(key.isRequired, false, "five of the eight tools work without it");
       // `npx jobo-developer-mcp` has to start the server.
       assert.deepEqual(pkg.bin, { [pkg.name]: "dist/index.js" });
       assert.ok(pkg.files.includes("dist"));
@@ -395,7 +416,7 @@ describe("the developer MCP server", () => {
       assert.equal(header.name, "Authorization");
       assert.equal(header.value, "Bearer {api_key}");
       assert.equal(header.isSecret, true);
-      assert.equal(header.isRequired, false, "three of the six tools work without it");
+      assert.equal(header.isRequired, false, "five of the eight tools work without it");
     });
 
     it("serves the AI Catalog pointing at the card", async () => {
@@ -422,8 +443,14 @@ describe("the developer MCP server", () => {
     const keyless = () => toolNames.filter((name) => !catalog[name]?.needsKey);
     const keyed = () => toolNames.filter((name) => catalog[name]?.needsKey);
 
-    it("splits the tools three and three", () => {
-      assert.deepEqual(keyless().sort(), ["build_search_request", "describe_search_filters", "list_filters"]);
+    it("splits the tools five without a key and three with one", () => {
+      assert.deepEqual(keyless().sort(), [
+        "build_search_request",
+        "build_signals_request",
+        "describe_search_filters",
+        "describe_signal_filters",
+        "list_filters",
+      ]);
       assert.deepEqual(keyed().sort(), ["find_companies", "find_filter_values", "find_locations"]);
     });
 
@@ -732,6 +759,64 @@ describe("the developer MCP server", () => {
       assert.ok(result.text.includes("`work_model`"), result.text);
       assert.ok(result.text.includes("relevance, discovered_asc, discovered_desc"));
       assert.deepEqual(seen, []);
+    });
+  });
+
+  // ── The Hiring Signals tools over the wire ─────────────────────────────────
+
+  describe("the Hiring Signals tools", () => {
+    it("describe_signal_filters returns the contract with no key and no request", async () => {
+      const result = await call("describe_signal_filters", {});
+      assert.equal(result.isError, false, result.text);
+      assert.equal(result.structured.endpoints.list.url, "https://connect.jobo.world/api/signals");
+      assert.deepEqual(result.structured.endpoints.company.takes, [
+        "types",
+        "min_strength",
+        "detected_after",
+        "detected_before",
+        "created_after",
+      ]);
+      assert.ok(result.text.includes("ten times the price of a job"), result.text);
+      assert.ok(result.text.includes("minus five minutes"));
+      assert.deepEqual(seen, []);
+    });
+
+    it("build_signals_request returns the GET request and never sends it", async () => {
+      const result = await call("build_signals_request", {
+        types: ["hiring_surge", "new_country"],
+        domains: ["stripe.com"],
+        exclude_agencies: true,
+        limit: 10,
+      });
+      assert.equal(result.isError, false, result.text);
+      assert.equal(result.structured.sent, false);
+      assert.deepEqual(result.structured.request, {
+        method: "GET",
+        url: "https://connect.jobo.world/api/signals?types=hiring_surge%2Cnew_country&domains=stripe.com&exclude_agencies=true&limit=10",
+        path: "/api/signals",
+        query: { types: "hiring_surge,new_country", domains: "stripe.com", exclude_agencies: true, limit: 10 },
+        headers: { "X-Api-Key": "<your API key, read from the JOBO_API_KEY environment variable>" },
+      });
+      assert.equal(result.structured.billing.max_signals_billed, 10);
+      assert.deepEqual(seen, [], "build_signals_request must not send anything");
+    });
+
+    it("build_signals_request refuses a filter the per-company endpoint does not take, naming it", async () => {
+      const result = await call("build_signals_request", { company_id: "6c1f0a9e-3b7d-4c55-8e21-5a4d9f0b7c33", domains: ["stripe.com"] });
+      assert.equal(result.isError, true);
+      assert.ok(result.text.includes("- domains: `GET /api/companies/{id}/signals` does not take `domains`"), result.text);
+      assert.equal(result.structured.request, undefined);
+    });
+
+    it("publishes build_signals_request's parameters from the signals contract", async () => {
+      const { result } = await rpc(await modern("tools/list"));
+      const { properties } = result.tools.find((tool: { name: string }) => tool.name === "build_signals_request").inputSchema;
+      for (const name of ["types", "domains", "job_cities", "min_strength", "created_after", "company_id", "limit", "cursor"]) {
+        assert.ok(properties[name], `missing parameter ${name}`);
+      }
+      assert.ok(properties.types.description.includes("hiring_surge"));
+      assert.equal(properties.min_strength.type, "integer");
+      assert.equal(properties.exclude_agencies.type, "boolean");
     });
   });
 

@@ -1,8 +1,8 @@
 # Installing the Jobo developer MCP server
 
-For an AI agent setting this server up for a developer. It gives a coding agent six free reference tools for
-writing code against the Jobo jobs API: company ids, filter values, places, the filter contract, and a
-checked search request. It never searches jobs.
+For an AI agent setting this server up for a developer. It gives a coding agent eight free reference tools
+for writing code against the Jobo jobs API: company ids, filter values, places, the filter contracts, and
+checked search and Hiring Signals requests. It never searches jobs and never reads signals.
 
 ## What you need
 
@@ -10,8 +10,9 @@ A Jobo API key for the three lookup tools (`find_companies`, `find_filter_values
 developer creates one at https://enterprise.jobo.world/api-keys. Ask them for it, or better, ask them to put
 it in the `JOBO_API_KEY` environment variable. Never write the key into a file that could be committed.
 
-The other three tools (`list_filters`, `describe_search_filters`, `build_search_request`) need no key, so
-the server is useful before the developer has one.
+The other five tools (`list_filters`, `describe_search_filters`, `build_search_request`,
+`describe_signal_filters`, `build_signals_request`) need no key, so the server is useful before the developer
+has one.
 
 ## Option 1: the hosted server (recommended)
 
@@ -53,7 +54,7 @@ the package.
 
 ## Check it works
 
-1. List the server's tools. There are six.
+1. List the server's tools. There are eight.
 2. Call `list_filters` with no arguments. It needs no key and returns the fixed filter vocabularies.
 3. With a key, call `find_companies` with `{"q": "stripe"}`. It returns companies with their ids.
 

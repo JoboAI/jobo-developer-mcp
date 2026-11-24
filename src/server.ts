@@ -1,11 +1,13 @@
 /**
- * The MCP server and its six tools.
+ * The MCP server and its eight tools.
  *
- * All six are read-only and free. Three reach the Jobo API and need the
+ * All eight are read-only and free. Three reach the Jobo API and need the
  * caller's API key (`find_companies`, `find_filter_values`, `find_locations`);
- * three answer from the shared filter contract with no key and no network
- * (`list_filters`, `describe_search_filters`, `build_search_request`).
+ * five answer from the filter contracts with no key and no network
+ * (`list_filters`, `describe_search_filters`, `build_search_request`, and for
+ * Hiring Signals `describe_signal_filters`, `build_signals_request`).
  * `TOOL_CATALOG` says which is which, and the tests hold every tool to it.
+ * No tool reads signals: every signal returned is billed.
  *
  * The descriptions are written for an agent that is writing integration code:
  * what to store, which field of the request a value goes into, what it costs
@@ -62,9 +64,21 @@ import {
   renderFixedVocabularies,
   renderLocations,
   renderOccupationMatches,
+  renderSignalFilterContract,
+  renderSignalsBuildResult,
   resolvePlace,
 } from "./format.js";
 import { buildSearchRequest } from "./request.js";
+import {
+  COMPANY_SIGNAL_FILTER_KEYS,
+  HIRING_SIGNAL_FILTERS,
+  SIGNAL_DEFAULT_LIMIT,
+  SIGNAL_MAX_LIMIT,
+  SIGNAL_MAX_LIST_VALUES,
+  describeSignalFilters,
+  type SignalFilterDescriptor,
+} from "./signals-contract.js";
+import { buildSignalsRequest } from "./signals-request.js";
 import { callApi, type CallOptions, type FreeEndpoint } from "./upstream.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -85,6 +99,8 @@ export const TOOL_CATALOG = {
   list_filters: { needsKey: false, upstream: [] },
   describe_search_filters: { needsKey: false, upstream: [] },
   build_search_request: { needsKey: false, upstream: [] },
+  describe_signal_filters: { needsKey: false, upstream: [] },
+  build_signals_request: { needsKey: false, upstream: [] },
 } as const satisfies Record<string, ToolEntry>;
 
 export type ToolName = keyof typeof TOOL_CATALOG;
@@ -104,15 +120,20 @@ export const SERVER_INSTRUCTIONS =
   "of filters and returns the request body, a curl command, a PowerShell command and a `jobo` CLI command. Filter values are matched " +
   "exactly, and a value the index does not hold returns zero jobs rather than an error, so look values up " +
   "instead of guessing them.\n\n" +
+  "Hiring Signals (`GET /api/signals`, `GET /api/companies/{id}/signals`): company-level events detected from job " +
+  "postings (a hiring surge, a first job in a country, a leadership search). `describe_signal_filters` gives that " +
+  "contract: filters, the focus-filter rule, paging, billing, and how to poll for new signals. `build_signals_request` " +
+  "checks a set of signals filters and returns the GET request, curl, PowerShell and `jobo signals` commands.\n\n" +
   `What costs money: nothing on this server. In the code you write: ${BILLING_SUMMARY} ` +
-  "`build_search_request` never sends the request. Do not run a command it returns unless the " +
-  "user wants the search run, and keep `page_size` small while testing; a sandbox key (jbe_test_…) runs search " +
-  "against fictional jobs at no charge.\n\n" +
+  "Hiring Signals are billed per signal returned, at ten times the price of a job, and a signal read again is billed " +
+  "again. `build_search_request` and `build_signals_request` never send the request, and no tool here reads signals. " +
+  "Do not run a command they return unless the user wants it run, and keep `page_size` or `limit` small while " +
+  "testing; a sandbox key (jbe_test_…) runs search against fictional jobs at no charge and cannot read signals.\n\n" +
   "The key: the three `find_` tools call the Jobo API with the developer's own API key, " +
   (STDIO
     ? `read from the \`${API_KEY_ENV}\` environment variable this server was started with. `
     : "sent by the MCP client as `Authorization: Bearer <key>` in this server's config. ") +
-  "The other three need no key. Keys are created at " +
+  "The other five need no key. Keys are created at " +
   `${API_KEYS_URL}. Never write a key into source files: read it from the \`${API_KEY_ENV}\` environment variable.`;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -244,6 +265,58 @@ export const BUILD_SEARCH_REQUEST_INPUT = z.looseObject({
   ),
   include_fields: parameter(STRING_LIST, optionDescription("include_fields")),
   include_facets: parameter(STRING_LIST, optionDescription("include_facets")),
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  build_signals_request input, generated from the signals contract
+// ─────────────────────────────────────────────────────────────────────────────
+
+function signalParameterType(filter: SignalFilterDescriptor): JsonSchemaHint {
+  switch (filter.kind) {
+    case "stringList":
+    case "enumList":
+      return STRING_OR_LIST;
+    case "number":
+      return INTEGER;
+    case "boolean":
+      return { type: "boolean" };
+    case "date":
+    case "dateTime":
+      return STRING;
+    default: {
+      const unhandled: never = filter.kind;
+      throw new Error(`Unhandled filter kind: ${String(unhandled)}`);
+    }
+  }
+}
+
+function signalParameterDescription(filter: SignalFilterDescriptor): string {
+  const parts = [filter.description];
+  if (filter.options) parts.push(`One of: ${filter.options.join(", ")}.`);
+  if (filter.kind === "stringList" || filter.kind === "enumList") {
+    parts.push(`An array; no value may contain a comma; at most ${SIGNAL_MAX_LIST_VALUES} values.`);
+  }
+  if (filter.kind === "number" && filter.min !== undefined && filter.max !== undefined) parts.push(`${filter.min} to ${filter.max}.`);
+  if (filter.kind === "dateTime") parts.push("ISO 8601 with seconds, e.g. 2026-11-12T09:30:00Z.");
+  if (!filter.company) parts.push("Not taken with `company_id`.");
+  return parts.join(" ");
+}
+
+/** Loose for the same reason as `BUILD_SEARCH_REQUEST_INPUT`: every mistake is answered in `buildSignalsRequest`'s words. */
+export const BUILD_SIGNALS_REQUEST_INPUT = z.looseObject({
+  ...Object.fromEntries(
+    HIRING_SIGNAL_FILTERS.map((filter) => [filter.key, parameter(signalParameterType(filter), signalParameterDescription(filter))]),
+  ),
+  company_id: parameter(
+    STRING,
+    "One Jobo company id (a GUID): the request then reads `GET /api/companies/{id}/signals`, which takes only " +
+      `${COMPANY_SIGNAL_FILTER_KEYS.join(", ")}. Look the id up with \`find_companies\`.`,
+  ),
+  limit: parameter(
+    INTEGER,
+    `Signals per page, 1–${SIGNAL_MAX_LIMIT} (API default ${SIGNAL_DEFAULT_LIMIT}). The most the request can bill: every signal returned is billed.`,
+  ),
+  cursor: parameter(STRING, "The previous page's `next_cursor`, unchanged, with the same filters."),
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -515,6 +588,52 @@ export function buildServer(): McpServer {
     async (args) => {
       const result = buildSearchRequest(args as Record<string, unknown>);
       return { ...reply(renderBuildResult(result), result), ...(result.valid ? {} : { isError: true }) };
+    },
+  );
+
+  // ── describe_signal_filters ──────────────────────────────────────────────
+  server.registerTool(
+    "describe_signal_filters",
+    {
+      title: "Describe the Hiring Signals filters",
+      description:
+        "The Hiring Signals contract for `GET /api/signals` and `GET /api/companies/{id}/signals`: every filter with " +
+        "its type, accepted values or range and what it matches, which filters the per-company endpoint takes, the " +
+        "focus-filter rule (which types a request with `functions`, `roles` or `job_regions` can return), paging, what " +
+        "a read costs, and how to poll for new signals without paying twice. A signal is one event at one company, " +
+        "detected from its job postings. Read it before writing code that reads signals: each signal returned is " +
+        `billed at ten times the price of a job, and a signal read again is billed again. ${KEYLESS}`,
+      inputSchema: z.object({}),
+      annotations: { title: "Describe the Hiring Signals filters", ...READ_ONLY },
+      _meta: meta("describe_signal_filters"),
+    },
+    async () => {
+      const contract = describeSignalFilters();
+      return reply(renderSignalFilterContract(contract), contract);
+    },
+  );
+
+  // ── build_signals_request ────────────────────────────────────────────────
+  server.registerTool(
+    "build_signals_request",
+    {
+      title: "Build a Hiring Signals request",
+      description:
+        "Check a set of Hiring Signals filters against the contract and return the exact request: method, URL with " +
+        "its query string, headers, a `curl` command (bash, zsh), the same request for PowerShell, and the `jobo " +
+        "signals` command. Pass `company_id` for one company's endpoint. The commands read the key from the " +
+        "`JOBO_API_KEY` environment variable. It does not send the request: no network call, no key, no cost. " +
+        "Sending it is billed per signal returned, at ten times the price of a job, and `limit` is the most one " +
+        "call can bill. An unknown filter, a value outside a fixed vocabulary, a list value with a comma, more than " +
+        "100 values, a number out of range, a date in the wrong shape or a filter the per-company endpoint does not " +
+        "take is reported, and no request is built.",
+      inputSchema: BUILD_SIGNALS_REQUEST_INPUT,
+      annotations: { title: "Build a Hiring Signals request", ...READ_ONLY },
+      _meta: meta("build_signals_request"),
+    },
+    async (args) => {
+      const result = buildSignalsRequest(args as Record<string, unknown>);
+      return { ...reply(renderSignalsBuildResult(result), result), ...(result.valid ? {} : { isError: true }) };
     },
   );
 
