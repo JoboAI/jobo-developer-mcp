@@ -54,6 +54,28 @@ export const SIGNAL_DEFAULT_LIMIT = 50;
 /** The most values one comma-separated filter takes. */
 export const SIGNAL_MAX_LIST_VALUES = 100;
 
+/**
+ * `sort` values, the default first (core's `SIGNAL_SORTS`). `detected_desc` is
+ * the newest detection day first: the order to browse in. `created_asc` is the
+ * order signals were stored in, oldest first: the order to poll in. A
+ * `next_cursor` belongs to the order it was issued under.
+ */
+export const SIGNAL_SORTS = ["detected_desc", "created_asc"] as const;
+export type SignalSort = (typeof SIGNAL_SORTS)[number];
+export const SIGNAL_DEFAULT_SORT: SignalSort = "detected_desc";
+/** The order to poll in. */
+export const SIGNAL_POLL_SORT: SignalSort = "created_asc";
+
+/** What each order is, in a sentence. */
+export const SIGNAL_SORT_ORDERS: Readonly<Record<SignalSort, string>> = {
+  detected_desc:
+    "Newest detection day first; the default. For browsing: a signal stored today can be for an earlier day, so this " +
+    "order cannot be resumed from a timestamp.",
+  created_asc:
+    "The order signals were stored in, oldest first. The order to poll in, with `created_after` set to the last " +
+    "`created_at` read.",
+};
+
 /** A short name for each signal type, as Jobo's dashboard shows it. */
 export const SIGNAL_TYPE_LABELS: Readonly<Record<string, string>> = {
   hiring_surge: "Hiring surge",
@@ -299,7 +321,7 @@ export const HIRING_SIGNAL_FILTERS: readonly SignalFilterDescriptor[] = [
     label: "Created After",
     kind: "dateTime",
     description:
-      "Only signals first stored after this instant, exclusive. To read what is new, pass the newest created_at already received.",
+      "Only signals first stored after this instant, exclusive. To read what is new, read in stored order and pass the created_at of the last signal received, unchanged.",
     company: true,
   },
 ];
@@ -341,20 +363,23 @@ export const SIGNALS_BILLING =
   "(the plan's included signals this month). 402 when included signals and wallet cannot cover the page: nothing is " +
   "charged or returned.";
 
-/** How to read only what is new without paying for much twice. */
+/** How to read only what is new, each signal once: the stored order. */
 export const POLLING_RECIPE =
-  "To read only new signals: store the newest `created_at` received; on the next read pass `created_after` = that " +
-  "value minus five minutes (signals being stored while the last read ran), page with `cursor` until `has_more` is " +
-  "false, and skip any `id` already held. `created_after` is exclusive and compares all seven decimal places of " +
-  "`created_at`, so store it as the API sent it. The signals inside the five-minute overlap are billed again, so keep " +
-  "the overlap at five minutes and do not page from the top on every poll. Keep the filters the same between polls, " +
-  "and set at least one narrowing filter: without one a poll reads every signal Jobo detects.";
+  "To read only new signals: keep the `created_at` of the last signal processed, as the string the API sent (it has " +
+  "microseconds; a millisecond date type drops digits, and that signal is read and billed again). Request " +
+  "`sort=created_asc&created_after=<that value>&limit=<n>` with the same filters and process in order. No overlap, " +
+  "no seen-id list; an empty poll is free. If `has_more` is true, continue now with `cursor` and the same `sort`, or " +
+  "stop and continue next time from the kept `created_at`. Start the first poll from a time: without `created_after` " +
+  "the stored order starts at the oldest signal and bills every one. Signals stored before 2026-11-24 share one " +
+  "`created_at` per batch; only `cursor` continues inside one. Set a narrowing filter.";
 
 export const PAGING_RULE =
   `\`limit\` is 1 to ${SIGNAL_MAX_LIMIT} signals per page (default ${SIGNAL_DEFAULT_LIMIT}) and is the most one request ` +
-  "can bill. Pass the previous page's `next_cursor` as `cursor`, with the filters unchanged, until `has_more` is false. " +
-  "Pages run newest detection day first, not in the order signals were stored, so a cursor walk is not a way to poll: " +
-  "use `created_after`.";
+  `can bill. \`sort\` is \`${SIGNAL_DEFAULT_SORT}\` (the default: newest detection day first) or \`${SIGNAL_POLL_SORT}\` ` +
+  "(the order signals were stored in, oldest first); any other value is a 400 naming `sort`. Pass the previous page's " +
+  "`next_cursor` as `cursor`, with the same `sort` and filters, until `has_more` is false. A cursor belongs to the " +
+  "sort it was issued under: sent with the other one it is a 400 naming `cursor`. Poll in `created_asc`; the default " +
+  "order cannot be resumed from a timestamp.";
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  describe_signal_filters
@@ -423,7 +448,13 @@ export interface SignalFilterContract {
   auth_header: "X-Api-Key";
   filters: SignalFilterDescription[];
   types: { type: string; label: string }[];
-  paging: { limit: { min: 1; max: number; default: number }; cursor: string; rule: string };
+  paging: {
+    limit: { min: 1; max: number; default: number };
+    /** The orders a page can be read in; a cursor belongs to the one it was issued under. */
+    sort: { values: readonly SignalSort[]; default: SignalSort; poll: SignalSort; orders: Readonly<Record<SignalSort, string>> };
+    cursor: string;
+    rule: string;
+  };
   limits: { max_list_values: number };
   focus_rule: string;
   billing: string;
@@ -448,7 +479,10 @@ export function describeSignalFilters(): SignalFilterContract {
     types: SIGNAL_TYPES.map((type) => ({ type, label: SIGNAL_TYPE_LABELS[type] ?? type })),
     paging: {
       limit: { min: 1, max: SIGNAL_MAX_LIMIT, default: SIGNAL_DEFAULT_LIMIT },
-      cursor: "The previous page's `next_cursor`, unchanged.",
+      sort: { values: SIGNAL_SORTS, default: SIGNAL_DEFAULT_SORT, poll: SIGNAL_POLL_SORT, orders: SIGNAL_SORT_ORDERS },
+      cursor:
+        "The previous page's `next_cursor`, unchanged, with the same `sort` and filters. A cursor belongs to the sort " +
+        "it was issued under: sent with the other one, the API answers 400 naming `cursor`.",
       rule: PAGING_RULE,
     },
     limits: { max_list_values: SIGNAL_MAX_LIST_VALUES },

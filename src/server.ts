@@ -73,8 +73,11 @@ import {
   COMPANY_SIGNAL_FILTER_KEYS,
   HIRING_SIGNAL_FILTERS,
   SIGNAL_DEFAULT_LIMIT,
+  SIGNAL_DEFAULT_SORT,
   SIGNAL_MAX_LIMIT,
   SIGNAL_MAX_LIST_VALUES,
+  SIGNAL_POLL_SORT,
+  SIGNAL_SORTS,
   describeSignalFilters,
   type SignalFilterDescriptor,
 } from "./signals-contract.js";
@@ -122,7 +125,8 @@ export const SERVER_INSTRUCTIONS =
   "instead of guessing them.\n\n" +
   "Hiring Signals (`GET /api/signals`, `GET /api/companies/{id}/signals`): company-level events detected from job " +
   "postings (a hiring surge, a first job in a country, a leadership search). `describe_signal_filters` gives that " +
-  "contract: filters, the focus-filter rule, paging, billing, and how to poll for new signals. `build_signals_request` " +
+  "contract: filters, the focus-filter rule, paging, billing, and how to poll for new signals (in stored order, " +
+  `\`sort=${SIGNAL_POLL_SORT}\` with \`created_after\`, which reads each signal once). \`build_signals_request\` ` +
   "checks a set of signals filters and returns the GET request, curl, PowerShell and `jobo signals` commands.\n\n" +
   `What costs money: nothing on this server. In the code you write: ${BILLING_SUMMARY} ` +
   "Hiring Signals are billed per signal returned, at ten times the price of a job, and a signal read again is billed " +
@@ -312,11 +316,20 @@ export const BUILD_SIGNALS_REQUEST_INPUT = z.looseObject({
     "One Jobo company id (a GUID): the request then reads `GET /api/companies/{id}/signals`, which takes only " +
       `${COMPANY_SIGNAL_FILTER_KEYS.join(", ")}. Look the id up with \`find_companies\`.`,
   ),
+  sort: parameter(
+    { type: "string", enum: [...SIGNAL_SORTS] },
+    `The order: \`${SIGNAL_DEFAULT_SORT}\` (default, newest detection day first) or \`${SIGNAL_POLL_SORT}\` (the order ` +
+      `signals were stored in, oldest first). Poll in \`${SIGNAL_POLL_SORT}\` with \`created_after\` set to the last ` +
+      "`created_at` read. Both endpoints take it.",
+  ),
   limit: parameter(
     INTEGER,
     `Signals per page, 1–${SIGNAL_MAX_LIMIT} (API default ${SIGNAL_DEFAULT_LIMIT}). The most the request can bill: every signal returned is billed.`,
   ),
-  cursor: parameter(STRING, "The previous page's `next_cursor`, unchanged, with the same filters."),
+  cursor: parameter(
+    STRING,
+    "The previous page's `next_cursor`, unchanged, with the same `sort` and filters: a cursor belongs to the sort it was issued under.",
+  ),
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -599,8 +612,9 @@ export function buildServer(): McpServer {
       description:
         "The Hiring Signals contract for `GET /api/signals` and `GET /api/companies/{id}/signals`: every filter with " +
         "its type, accepted values or range and what it matches, which filters the per-company endpoint takes, the " +
-        "focus-filter rule (which types a request with `functions`, `roles` or `job_regions` can return), paging, what " +
-        "a read costs, and how to poll for new signals without paying twice. A signal is one event at one company, " +
+        "focus-filter rule (which types a request with `functions`, `roles` or `job_regions` can return), paging and " +
+        "the two orders (`sort`), what a read costs, and how to poll for new signals in stored order " +
+        `(\`sort=${SIGNAL_POLL_SORT}\` with \`created_after\`) so each is read once. A signal is one event at one company, ` +
         "detected from its job postings. Read it before writing code that reads signals: each signal returned is " +
         `billed at ten times the price of a job, and a signal read again is billed again. ${KEYLESS}`,
       inputSchema: z.object({}),
@@ -625,8 +639,9 @@ export function buildServer(): McpServer {
         "`JOBO_API_KEY` environment variable. It does not send the request: no network call, no key, no cost. " +
         "Sending it is billed per signal returned, at ten times the price of a job, and `limit` is the most one " +
         "call can bill. An unknown filter, a value outside a fixed vocabulary, a list value with a comma, more than " +
-        "100 values, a number out of range, a date in the wrong shape or a filter the per-company endpoint does not " +
-        "take is reported, and no request is built.",
+        "100 values, a number out of range, a date in the wrong shape, a filter the per-company endpoint does not " +
+        `take or a \`sort\` other than ${SIGNAL_SORTS.join(" and ")} is reported, and no request is built. To poll, ` +
+        `pass \`sort: "${SIGNAL_POLL_SORT}"\` and \`created_after\`; it warns when one is set without the other.`,
       inputSchema: BUILD_SIGNALS_REQUEST_INPUT,
       annotations: { title: "Build a Hiring Signals request", ...READ_ONLY },
       _meta: meta("build_signals_request"),

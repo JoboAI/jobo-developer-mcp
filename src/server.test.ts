@@ -219,6 +219,8 @@ describe("the developer MCP server", () => {
     build_signals_request: [
       { types: ["hiring_surge"], domains: ["stripe.com"], limit: 10 },
       { company_id: "6c1f0a9e-3b7d-4c55-8e21-5a4d9f0b7c33", min_strength: 50 },
+      { types: ["hiring_surge"], sort: "created_asc", created_after: "2026-11-24T13:53:55.837281Z", limit: 10 },
+      { company_id: "6c1f0a9e-3b7d-4c55-8e21-5a4d9f0b7c33", sort: "created_asc", created_after: "2026-11-24T13:53:55.837281Z" },
     ],
   };
 
@@ -777,8 +779,37 @@ describe("the developer MCP server", () => {
         "created_after",
       ]);
       assert.ok(result.text.includes("ten times the price of a job"), result.text);
-      assert.ok(result.text.includes("minus five minutes"));
+      assert.ok(result.text.includes("sort=created_asc&created_after=<that value>&limit=<n>"), result.text);
+      assert.ok(!result.text.includes("minus five minutes"), "the old overlap recipe is still served");
+      assert.deepEqual(result.structured.paging.sort.values, ["detected_desc", "created_asc"]);
+      assert.equal(result.structured.paging.sort.default, "detected_desc");
+      assert.equal(result.structured.paging.sort.poll, "created_asc");
       assert.deepEqual(seen, []);
+    });
+
+    it("build_signals_request builds a stored-order poll for both endpoints and sends neither", async () => {
+      const list = await call("build_signals_request", {
+        domains: ["stripe.com"],
+        sort: "created_asc",
+        created_after: "2026-11-24T13:53:55.837281Z",
+        limit: 25,
+      });
+      assert.equal(list.isError, false, list.text);
+      assert.equal(
+        list.structured.request.url,
+        "https://connect.jobo.world/api/signals?domains=stripe.com&created_after=2026-11-24T13%3A53%3A55.837281Z&sort=created_asc&limit=25",
+      );
+      const company = await call("build_signals_request", {
+        company_id: "6c1f0a9e-3b7d-4c55-8e21-5a4d9f0b7c33",
+        sort: "created_asc",
+        created_after: "2026-11-24T13:53:55.837281Z",
+      });
+      assert.equal(company.isError, false, company.text);
+      assert.ok(company.structured.request.url.endsWith("/signals?created_after=2026-11-24T13%3A53%3A55.837281Z&sort=created_asc"));
+      const bad = await call("build_signals_request", { domains: ["stripe.com"], sort: "newest" });
+      assert.equal(bad.isError, true);
+      assert.ok(bad.text.includes("- sort: Unknown value \"newest\""), bad.text);
+      assert.deepEqual(seen, [], "no tool may send a signals request");
     });
 
     it("build_signals_request returns the GET request and never sends it", async () => {
@@ -811,9 +842,10 @@ describe("the developer MCP server", () => {
     it("publishes build_signals_request's parameters from the signals contract", async () => {
       const { result } = await rpc(await modern("tools/list"));
       const { properties } = result.tools.find((tool: { name: string }) => tool.name === "build_signals_request").inputSchema;
-      for (const name of ["types", "domains", "job_cities", "min_strength", "created_after", "company_id", "limit", "cursor"]) {
+      for (const name of ["types", "domains", "job_cities", "min_strength", "created_after", "company_id", "sort", "limit", "cursor"]) {
         assert.ok(properties[name], `missing parameter ${name}`);
       }
+      assert.deepEqual(properties.sort.enum, ["detected_desc", "created_asc"]);
       assert.ok(properties.types.description.includes("hiring_surge"));
       assert.equal(properties.min_strength.type, "integer");
       assert.equal(properties.exclude_agencies.type, "boolean");
@@ -857,6 +889,7 @@ describe("the developer MCP server", () => {
         );
         for (const request of seen) {
           assert.equal(isBilledPath(request.path), false, `${name} called a billed endpoint: ${request.method} ${request.path}`);
+          assert.ok(!/\/signals(?:$|[/?])/.test(request.pathname), `${name} requested signals: ${request.path}`);
           assert.equal(request.method, "GET", `${name} sent a ${request.method}: every lookup is a read`);
           assert.ok(
             declared.some((pattern) => pattern.test(request.pathname)),

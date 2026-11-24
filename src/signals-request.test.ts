@@ -106,6 +106,44 @@ describe("build_signals_request: the request", () => {
     assert.equal(built({ domains: ["stripe.com"] }).billing?.max_signals_billed, 50, "the API's default limit");
   });
 
+  it("puts sort=created_asc in the URL and leaves the default out, on both endpoints", () => {
+    const at = "2026-11-24T13:53:55.837281Z";
+    const poll = built({ domains: ["stripe.com"], sort: "created_asc", created_after: at, limit: 20 });
+    assert.equal(
+      poll.request.url,
+      "https://connect.jobo.world/api/signals?domains=stripe.com&created_after=2026-11-24T13%3A53%3A55.837281Z&sort=created_asc&limit=20",
+    );
+    assert.equal(poll.request.query.created_after, at, "created_after is sent as given, every digit");
+    assert.equal(built({ domains: ["stripe.com"], sort: "Created_Asc" }).request.query.sort, "created_asc");
+
+    const company = built({ company_id: COMPANY, sort: "created_asc", created_after: at });
+    assert.equal(
+      company.request.url,
+      `https://connect.jobo.world/api/companies/${COMPANY}/signals?created_after=2026-11-24T13%3A53%3A55.837281Z&sort=created_asc`,
+    );
+
+    const browse = built({ domains: ["stripe.com"], sort: "detected_desc" });
+    assert.equal(browse.request.url, "https://connect.jobo.world/api/signals?domains=stripe.com");
+    assert.equal(browse.request.query.sort, undefined);
+    assert.equal(built({ company_id: COMPANY, sort: "detected_desc" }).request.url, `https://connect.jobo.world/api/companies/${COMPANY}/signals`);
+  });
+
+  it("writes the jobo command with --sort for the stored order, and without it for the default", () => {
+    const poll = built({ domains: ["stripe.com"], sort: "created_asc", created_after: "2026-11-24T13:53:55.837281Z", limit: 20 });
+    // The value goes into the command as given, every digit: the CLI sends an instant as typed.
+    assert.equal(
+      poll.cli,
+      "jobo signals --domains stripe.com --created-after 2026-11-24T13:53:55.837281Z --sort created_asc --max 20 --json",
+    );
+    assert.ok(renderSignalsBuildResult(poll).includes("--sort created_asc --max 20 --json"));
+
+    const company = built({ company_id: COMPANY, sort: "created_asc", created_after: "2026-11-24T13:53:55.837281Z" });
+    assert.ok(company.cli?.includes(`--company-id ${COMPANY}`));
+    assert.ok(company.cli?.includes("--sort created_asc"));
+
+    assert.equal(built({ domains: ["stripe.com"], sort: "detected_desc" }).cli, "jobo signals --domains stripe.com --max 50 --json");
+  });
+
   it("leaves out what was not set, including false", () => {
     assert.deepEqual(built({ domains: ["stripe.com"], exclude_agencies: false, roles: [], cursor: null }).request.query, {
       domains: "stripe.com",
@@ -170,6 +208,17 @@ describe("build_signals_request: errors, which stop the request", () => {
     built({ created_after: "2026-11-12T09:30:00" });
   });
 
+  it("refuses a sort that is neither order, with the nearest one", () => {
+    const errors = errorsOf({ domains: ["stripe.com"], sort: "created_ascending" });
+    assert.ok(errors.sort?.includes('Unknown value "created_ascending".'), errors.sort);
+    assert.ok(errors.sort?.includes("Valid values: detected_desc, created_asc."), errors.sort);
+    assert.ok(errorsOf({ sort: "creatd_asc" }).sort?.includes('Did you mean "created_asc"?'));
+    assert.ok(errorsOf({ sort: "newest" }).sort?.includes("400 naming `sort`"));
+    assert.ok(errorsOf({ sort: 1 }).sort?.includes("Takes a string."));
+    assert.ok(errorsOf({ company_id: COMPANY, sort: "oldest" }).sort, "the per-company endpoint checks it too");
+    assert.ok(errorsOf({ order: "created_asc" }).order?.includes("`sort`"));
+  });
+
   it("refuses a detection window that ends before it starts", () => {
     assert.ok(errorsOf({ detected_after: "2026-11-10", detected_before: "2026-11-01" }).detected_after?.includes("later than"));
   });
@@ -209,15 +258,71 @@ describe("build_signals_request: warnings and notes", () => {
   it("explains the focus rule when a focus filter is set, and how to poll", () => {
     const focused = built({ functions: ["Technology"], job_regions: ["Texas"] }).notes ?? [];
     assert.ok(focused.some((note) => note.includes("Focus filters set (functions, job_regions)")));
-    assert.ok(focused.some((note) => note.includes("minus five minutes")));
+    assert.ok(focused.some((note) => note.includes("sort=created_asc&created_after=<that value>&limit=<n>")));
     assert.ok(focused.some((note) => note.includes("Do not retry")));
     assert.ok(!(built({ domains: ["stripe.com"] }).notes ?? []).some((note) => note.includes("Focus filters set")));
+  });
+
+  it("never gives the old overlap advice", () => {
+    for (const input of [
+      { domains: ["stripe.com"] },
+      { domains: ["stripe.com"], created_after: "2026-11-24T13:53:55.837281Z" },
+      { domains: ["stripe.com"], sort: "created_asc", created_after: "2026-11-24T13:53:55.837281Z" },
+      { domains: ["stripe.com"], sort: "created_asc" },
+    ]) {
+      const text = renderSignalsBuildResult(buildSignalsRequest(input));
+      assert.ok(!/five minutes|skip ids|skip any|overlap is billed/.test(text), `${JSON.stringify(input)}: ${text}`);
+    }
+    assert.ok(!/five minutes/.test(errorsOf({ created_after: "yesterday" }).created_after ?? ""));
+  });
+
+  it("warns on created_after without the stored order, and names the fix", () => {
+    const result = built({ domains: ["stripe.com"], created_after: "2026-11-24T13:53:55.837281Z" });
+    const warning = result.warnings.find((entry) => entry.field === "created_after");
+    assert.ok(warning?.message.includes("cannot be resumed from a timestamp"), warning?.message);
+    assert.ok(warning?.message.includes('add `sort: "created_asc"`'), warning?.message);
+    assert.ok(
+      built({ domains: ["stripe.com"], sort: "detected_desc", created_after: "2026-11-24T13:53:55Z" }).warnings.some(
+        (entry) => entry.field === "created_after",
+      ),
+      "an explicit default order is warned on too",
+    );
+    assert.ok(built({ company_id: COMPANY, created_after: "2026-11-24T13:53:55Z" }).warnings.some((entry) => entry.field === "created_after"));
+  });
+
+  it("warns on the stored order with neither created_after nor cursor: it starts at the oldest signal", () => {
+    const result = built({ domains: ["stripe.com"], sort: "created_asc" });
+    assert.deepEqual(result.warnings.map((entry) => entry.field), ["sort"]);
+    assert.ok(result.warnings[0]?.message.includes("starts at the oldest signal"));
+    assert.ok(result.warnings[0]?.message.includes("bills each one"));
+    assert.deepEqual(built({ domains: ["stripe.com"], sort: "created_asc", cursor: "abc" }).warnings, [], "a cursor carries the position");
+  });
+
+  it("gives no ordering warning to a correct poll, and tells it how to continue", () => {
+    const result = built({ domains: ["stripe.com"], sort: "created_asc", created_after: "2026-11-24T13:53:55.837281Z" });
+    assert.deepEqual(result.warnings, []);
+    const notes = result.notes ?? [];
+    assert.ok(notes.some((note) => note.includes("as the string the API sent") && note.includes("`cursor` = `next_cursor`")));
+    assert.ok(notes.some((note) => note.includes("2026-11-24")));
+    // Precision of created_after cannot be told from the value: a value with no fraction is not warned on.
+    assert.deepEqual(built({ domains: ["stripe.com"], sort: "created_asc", created_after: "2026-11-24T13:53:55Z" }).warnings, []);
+  });
+
+  it("says a cursor belongs to its sort", () => {
+    const notes = built({ domains: ["stripe.com"], sort: "created_asc", created_after: "2026-11-24T13:53:55Z", cursor: "abc" }).notes ?? [];
+    assert.ok(notes.some((note) => note.includes("Keep `sort` and every filter the same") && note.includes("400 naming `cursor`")));
   });
 });
 
 describe("the parameters build_signals_request takes", () => {
-  it("are the contract's filters, then company_id, limit and cursor", () => {
-    assert.deepEqual(SIGNALS_REQUEST_PARAMETERS, [...HIRING_SIGNAL_FILTERS.map((filter) => filter.key), "company_id", "limit", "cursor"]);
+  it("are the contract's filters, then company_id, sort, limit and cursor", () => {
+    assert.deepEqual(SIGNALS_REQUEST_PARAMETERS, [
+      ...HIRING_SIGNAL_FILTERS.map((filter) => filter.key),
+      "company_id",
+      "sort",
+      "limit",
+      "cursor",
+    ]);
   });
 });
 

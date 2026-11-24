@@ -9,9 +9,13 @@ import {
   FOCUS_SIGNAL_FILTER_KEYS,
   HIRING_SIGNAL_FILTERS,
   SIGNAL_DEFAULT_LIMIT,
+  SIGNAL_DEFAULT_SORT,
   SIGNAL_MAX_LIMIT,
   SIGNAL_MAX_LIST_VALUES,
+  SIGNAL_POLL_SORT,
   SIGNAL_SENIORITY,
+  SIGNAL_SORTS,
+  SIGNAL_SORT_ORDERS,
   SIGNAL_TYPES,
   SIGNAL_TYPE_LABELS,
   describeSignalFilters,
@@ -61,10 +65,31 @@ describe("describe_signal_filters", () => {
     assert.ok(contract.billing.includes("A signal read again is billed again"));
     assert.ok(contract.billing.includes("X-Quota-Remaining"));
     assert.ok(!/\$\d|\d credits/.test(contract.billing), `a fixed price is baked in: ${contract.billing}`);
-    assert.ok(contract.polling.includes("minus five minutes"));
-    assert.ok(contract.polling.includes("skip any `id` already held"));
+    assert.ok(contract.polling.includes("sort=created_asc&created_after=<that value>&limit=<n>"));
+    assert.ok(contract.polling.includes("as the string the API sent"));
+    assert.ok(contract.polling.includes("No overlap, no seen-id list"));
+    assert.ok(contract.polling.includes("continue now with `cursor` and the same `sort`"));
+    assert.ok(contract.polling.includes("Start the first poll from a time"));
+    assert.ok(contract.polling.includes("before 2026-11-24"));
+    assert.ok(!/five minutes|skip any|overlap is billed/.test(contract.polling), `the old overlap recipe: ${contract.polling}`);
+    // The old overlap recipe was 650 characters; an agent reads this in a tool result.
+    assert.ok(contract.polling.length <= 760, `the recipe grew to ${contract.polling.length} characters`);
     assert.ok(contract.notes.some((note) => note.includes("account_key_required") && note.includes("not_available_in_sandbox")));
     assert.ok(contract.notes.some((note) => note.includes("unknown `type`")));
+  });
+
+  it("describes sort beside limit and cursor: both orders, the default, the one to poll in", () => {
+    assert.deepEqual(contract.paging.sort.values, ["detected_desc", "created_asc"]);
+    assert.equal(contract.paging.sort.default, "detected_desc");
+    assert.equal(contract.paging.sort.poll, "created_asc");
+    assert.ok(contract.paging.sort.orders.detected_desc.includes("Newest detection day first"));
+    assert.ok(contract.paging.sort.orders.created_asc.includes("oldest first"));
+    assert.ok(contract.paging.cursor.includes("belongs to the sort it was issued under"));
+    assert.ok(contract.paging.rule.includes("400 naming `sort`"));
+    assert.ok(contract.paging.rule.includes("400 naming `cursor`"));
+    const text = renderSignalFilterContract(contract);
+    assert.ok(text.includes("- sort=detected_desc (default): Newest detection day first"), text);
+    assert.ok(text.includes("- sort=created_asc (poll in this): The order signals were stored in"), text);
   });
 
   it("labels every type", () => {
@@ -96,6 +121,7 @@ describe("the embedded signals contract against the repo contract", () => {
       enums: Record<string, string[]>;
       type_labels: Record<string, string>;
       limits: { default_limit: number; max_limit: number; max_list_values: number };
+      sort: { values: string[]; default: string; poll: string };
       filters: Array<{ key: string; kind: string; options?: string[]; narrowing?: boolean; company?: boolean; min?: number; max?: number }>;
       company_filter_keys: string[];
     };
@@ -109,6 +135,12 @@ describe("the embedded signals contract against the repo contract", () => {
       repo.limits,
       drift,
     );
+    assert.deepEqual(
+      { values: [...SIGNAL_SORTS], default: SIGNAL_DEFAULT_SORT, poll: SIGNAL_POLL_SORT },
+      repo.sort,
+      drift,
+    );
+    assert.deepEqual(Object.keys(SIGNAL_SORT_ORDERS), repo.sort.values, drift);
     assert.deepEqual([...COMPANY_SIGNAL_FILTER_KEYS], repo.company_filter_keys, drift);
     assert.deepEqual(
       HIRING_SIGNAL_FILTERS.map((filter) => ({

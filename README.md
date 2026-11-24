@@ -164,7 +164,7 @@ country, a leadership search, a new technology, a slowdown. `describe_signal_fil
 server can (see [the billed-endpoint guard](#the-billed-endpoint-guard)).
 
 `build_signals_request` takes the filter names as the API spells them (`types`, `domains`, `job_regions`),
-plus `company_id`, `limit` and `cursor`. Lists are arrays; the tool joins them with commas. It refuses, with
+plus `company_id`, `sort`, `limit` and `cursor`. Lists are arrays; the tool joins them with commas. It refuses, with
 a message that says what to send instead:
 
 - an unknown filter (`type` names `types`, `q` names `roles`, `location` names the job and headquarters
@@ -175,12 +175,27 @@ a message that says what to send instead:
   `yyyy-MM-dd`, and a `created_after` without a time and seconds, which the API refuses too;
 - with `company_id`, every filter `GET /api/companies/{id}/signals` does not take, by name. That endpoint
   takes only `types`, `min_strength`, `detected_after`, `detected_before` and `created_after`, and ignores
-  anything else without an error.
+  anything else without an error;
+- a `sort` other than `detected_desc` (the default, newest detection day first) or `created_asc` (the order
+  signals were stored in, oldest first). The API answers any other value with a 400. Both endpoints take
+  it; the default is left out of the URL.
 
-It warns on a read with no narrowing filter, and its notes state the focus-filter rule when a focus filter is
-set, how to poll with `created_after`, and that a request whose answer was lost must not be sent again. The
-result gives `limit` as the most the request can bill, and no price: a signal costs ten times a job on the
-account's own pricing, and a signal read again is billed again.
+It warns on a read with no narrowing filter, on `created_after` without `sort=created_asc` (the default order
+cannot be resumed from a timestamp), and on `sort=created_asc` with neither `created_after` nor `cursor`
+(the read starts at the oldest signal there is, and each one is billed). Its notes state the focus-filter
+rule when a focus filter is set, how to poll, and that a request whose answer was lost must not be sent
+again. The result gives `limit` as the most the request can bill, and no price: a signal costs ten times a
+job on the account's own pricing, and a signal read again is billed again.
+
+How both tools tell an agent to poll: keep the `created_at` of the last signal processed, as the string the
+API sent (it has microseconds, and a date type that keeps milliseconds drops digits, so that signal comes
+back and is billed again); request `sort=created_asc&created_after=<that value>&limit=<n>`; process in order.
+There is no overlap and no list of seen ids. When `has_more` is true, continue now with `cursor` and the same
+`sort` (a cursor belongs to the sort it was issued under), or stop and continue next time from the kept
+`created_at`. The first poll starts from a time: without `created_after` the stored order starts at the
+oldest signal there is. Signals stored before 2026-11-24 share one `created_at` per batch, and only a cursor
+continues inside one. For `sort=created_asc` the `jobo signals` command the tool writes carries
+`--sort created_asc`, which needs jobo-cli 0.6.0 or later.
 
 The signals contract is not in the pinned `@jobo-ai/connector-core` (0.5.0). `src/signals-contract.ts` holds
 a copy of core's filter list and type labels, with their wording, until core 0.7.0 is on npm; its test fails

@@ -376,6 +376,15 @@ export function renderSignalFilterContract(contract: SignalFilterContract): stri
     contract.focus_rule,
     "## Paging",
     contract.paging.rule,
+    contract.paging.sort.values
+      .map((value) => {
+        const marks = [
+          value === contract.paging.sort.default ? "default" : "",
+          value === contract.paging.sort.poll ? "poll in this" : "",
+        ].filter(Boolean);
+        return `- sort=${value}${marks.length > 0 ? ` (${marks.join("; ")})` : ""}: ${contract.paging.sort.orders[value]}`;
+      })
+      .join("\n"),
     "## Reading only what is new",
     contract.polling,
     "## Types",

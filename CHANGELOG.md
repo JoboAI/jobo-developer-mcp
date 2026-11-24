@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.4.0
+
+Hiring Signals: the two signals tools know `sort`, and the polling advice is the stored-order one. The old
+advice (pass `created_after` minus five minutes and skip ids already held) bills every signal in the overlap
+again; the API's `sort=created_asc` makes it unnecessary.
+
+### Added
+
+- **`sort`** on `build_signals_request`, for both endpoints: `detected_desc` (the default, newest detection
+  day first) or `created_asc` (the order signals were stored in, oldest first). Any other value is an error
+  and no request is built, as the API answers it with a 400 naming `sort`. The default is left out of the
+  URL; `created_asc` is put in. Nothing is sent, as before.
+- **`describe_signal_filters` describes `sort`** under `paging`, beside `limit` and `cursor`: both values,
+  the default, the one to poll in, and that a `next_cursor` belongs to the sort it was issued under.
+- **Two warnings from `build_signals_request`**: `created_after` without `sort=created_asc` (the default order
+  cannot be resumed from a timestamp; add `sort: "created_asc"`), and `sort=created_asc` with neither
+  `created_after` nor `cursor` (the read starts at the oldest signal there is and bills each one).
+
+### Changed
+
+- **The polling recipe**, in `describe_signal_filters`, in `build_signals_request`'s notes and in its
+  `created_after` error: keep the `created_at` of the last signal processed as the string the API sent,
+  request `sort=created_asc&created_after=<that value>&limit=<n>`, process in order. No overlap and no list of
+  seen ids. When `has_more` is true, continue with `cursor` and the same `sort`, or next time from the kept
+  `created_at`. Signals stored before 2026-11-24 share one `created_at` per batch, and only a cursor continues
+  inside one.
+- **The `jobo signals` command `build_signals_request` writes carries `--sort created_asc`** when the request
+  does. That flag is in jobo-cli 0.6.0 and later.
+- **The tool descriptions and the server instructions** say to poll in stored order.
+- **The drift test** holds the sort values, the default and the poll order to `contracts/signals.json`.
+
 ## 0.3.0
 
 Hiring Signals: two tools that describe and write the requests for `GET /api/signals` and

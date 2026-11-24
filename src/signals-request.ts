@@ -8,7 +8,7 @@
  * contract or a rule the API enforces (an unknown filter, a value outside a
  * fixed vocabulary, a list value with a comma, more than 100 values, a number
  * out of range, a date in the wrong shape, a filter the per-company endpoint
- * does not take): one error and no request is built. A **warning** is what
+ * does not take, a `sort` that is neither order): one error and no request is built. A **warning** is what
  * the API would accept but probably not mean.
  *
  * The query is built the way core's `toSignalsQuery` builds it (lists joined
@@ -36,8 +36,11 @@ import {
   POLLING_RECIPE,
   SIGNALS_PATH,
   SIGNAL_DEFAULT_LIMIT,
+  SIGNAL_DEFAULT_SORT,
   SIGNAL_MAX_LIMIT,
   SIGNAL_MAX_LIST_VALUES,
+  SIGNAL_POLL_SORT,
+  SIGNAL_SORTS,
   signalFlagName,
   type SignalFilterDescriptor,
 } from "./signals-contract.js";
@@ -63,7 +66,7 @@ export interface SignalsBuildResult {
   curl?: string;
   /** Windows PowerShell 5.1 and PowerShell 7. Reads the key from the `JOBO_API_KEY` environment variable. */
   powershell?: string;
-  /** The same read as a `jobo signals` command. */
+  /** The same read as a `jobo signals` command. With a `sort` it needs jobo-cli 0.6.0 or later. */
   cli?: string;
   /** The most one call can bill, in signals. No price: it depends on the account. */
   billing?: { max_signals_billed: number; note: string };
@@ -74,7 +77,7 @@ export interface SignalsBuildResult {
 const FILTERS_BY_KEY: ReadonlyMap<string, SignalFilterDescriptor> = new Map(
   HIRING_SIGNAL_FILTERS.map((filter) => [filter.key, filter]),
 );
-const OPTION_KEYS = ["company_id", "limit", "cursor"] as const;
+const OPTION_KEYS = ["company_id", "sort", "limit", "cursor"] as const;
 
 /** Every parameter `build_signals_request` takes: the contract's filters, then the request options. */
 export const SIGNALS_REQUEST_PARAMETERS: readonly string[] = [...FILTERS_BY_KEY.keys(), ...OPTION_KEYS];
@@ -106,6 +109,9 @@ const MISNAMED: Readonly<Record<string, string>> = {
   page_size: "Unknown parameter. Did you mean `limit`?",
   size: "Unknown filter. Did you mean `company_sizes`?",
   created_before: "There is no `created_before`. `detected_before` bounds the detection day.",
+  order: `Unknown parameter. Did you mean \`sort\`? It takes ${SIGNAL_SORTS.join(" or ")}.`,
+  order_by: `Unknown parameter. Did you mean \`sort\`? It takes ${SIGNAL_SORTS.join(" or ")}.`,
+  sort_by: `Unknown parameter. Did you mean \`sort\`? It takes ${SIGNAL_SORTS.join(" or ")}.`,
 };
 
 function unknownParameter(key: string): string {
@@ -263,7 +269,7 @@ function checkFilter(filter: SignalFilterDescriptor, value: unknown, out: Checke
           field,
           message:
             "Takes an ISO 8601 date and time with seconds, e.g. 2026-11-12T09:30:00Z (up to seven decimal places, Z or an offset such as +02:00). A date alone is refused by the API." +
-            (field === "created_after" ? " Pass the newest `created_at` received, minus five minutes." : ""),
+            (field === "created_after" ? " To poll, pass the `created_at` of the last signal read, exactly as the API sent it." : ""),
         });
         return;
       }
@@ -326,6 +332,8 @@ export function toSignalsCliCommand(
     const flag = signalFlagName(filter.key);
     words.push(value === true ? `--${flag}` : flagArg(flag, String(value)));
   }
+  // `--sort` is in jobo-cli 0.6.0 and later. The query carries a sort only when it is not the default.
+  if (typeof query.sort === "string") words.push(flagArg("sort", query.sort));
   words.push(`--max ${limit}`);
   if (typeof query.cursor === "string") words.push(flagArg("cursor", query.cursor));
   words.push("--json");
@@ -386,7 +394,26 @@ export function buildSignalsRequest(input: Record<string, unknown>): SignalsBuil
     out.errors.push({ field: "detected_after", message: "Is later than detected_before, so no signal can match." });
   }
 
-  // ── Paging ─────────────────────────────────────────────────────────────────
+  // ── Order and paging ───────────────────────────────────────────────────────
+  let sort: string = SIGNAL_DEFAULT_SORT;
+  const rawSort = given("sort");
+  if (rawSort !== undefined) {
+    const match = typeof rawSort === "string" ? canonical(rawSort, SIGNAL_SORTS) : undefined;
+    if (match === undefined) {
+      const guess = typeof rawSort === "string" ? nearest(rawSort, SIGNAL_SORTS) : undefined;
+      out.errors.push({
+        field: "sort",
+        message:
+          `${typeof rawSort === "string" ? `Unknown value "${rawSort}".` : "Takes a string."}${guess ? ` Did you mean "${guess}"?` : ""} ` +
+          `Valid values: ${SIGNAL_SORTS.join(", ")}. The API answers any other value with a 400 naming \`sort\`.`,
+      });
+    } else {
+      sort = match;
+      // The default is what the API does without it: leave it out, as core's `toSignalsQuery` does.
+      if (match !== SIGNAL_DEFAULT_SORT) out.query.sort = match;
+    }
+  }
+
   const limit = given("limit");
   if (limit !== undefined) {
     if (typeof limit !== "number" || !Number.isInteger(limit) || limit < 1 || limit > SIGNAL_MAX_LIMIT) {
@@ -426,16 +453,40 @@ export function buildSignalsRequest(input: Record<string, unknown>): SignalsBuil
         "read them with a second request without focus filters.",
     );
   }
-  if (out.query.cursor !== undefined) {
-    notes.push("Keep every filter the same as on the request that returned this cursor: the API reads the cursor against them.");
+  const storedOrder = sort === SIGNAL_POLL_SORT;
+  if (out.query.created_after !== undefined && !storedOrder) {
+    out.warnings.push({
+      field: "created_after",
+      message:
+        `Without \`sort: "${SIGNAL_POLL_SORT}"\` this reads newest detection day first, and that order cannot be resumed ` +
+        "from a timestamp: a signal stored now can be for an earlier day, so a poll built on it misses some signals " +
+        `and reads others again. To poll, add \`sort: "${SIGNAL_POLL_SORT}"\`.`,
+    });
   }
-  if (out.query.created_after === undefined) {
-    notes.push(POLLING_RECIPE);
-  } else {
+  if (storedOrder && out.query.created_after === undefined && out.query.cursor === undefined) {
+    out.warnings.push({
+      field: "sort",
+      message:
+        `With \`${SIGNAL_POLL_SORT}\` and neither \`created_after\` nor \`cursor\`, the read starts at the oldest signal ` +
+        "there is and bills each one returned. Pass `created_after`: the time to start from, or the `created_at` of " +
+        "the last signal read.",
+    });
+  }
+  if (out.query.cursor !== undefined) {
     notes.push(
-      "`created_after` is exclusive and compares all seven decimal places of `created_at`. For the next poll, store the " +
-        "newest `created_at` received, pass it minus five minutes, and skip ids already held: the overlap is billed again.",
+      "Keep `sort` and every filter the same as on the request that returned this cursor: the API reads the cursor " +
+        "against them, and a cursor sent with the other `sort` is a 400 naming `cursor`.",
     );
+  }
+  if (storedOrder && out.query.created_after !== undefined) {
+    notes.push(
+      "For the next poll, keep the `created_at` of the last signal processed, as the string the API sent, and send it " +
+        "as `created_after` with the same `sort` and filters: no overlap and no list of seen ids. When `has_more` is " +
+        "true, continue now with `cursor` = `next_cursor`, or next time from that `created_at`. Signals stored before " +
+        "2026-11-24 share one `created_at` per batch: only `cursor` continues inside one.",
+    );
+  } else {
+    notes.push(POLLING_RECIPE);
   }
   notes.push(
     "Do not retry this request after a timeout, a dropped connection or a 500: the page may already have been billed. " +
