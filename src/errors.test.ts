@@ -3,7 +3,7 @@ import { describe, it } from "node:test";
 
 import { API_KEYS_URL, ApiKeyError } from "./auth.js";
 import { isUnavailable, readUpstreamBody, sentence, toToolError } from "./errors.js";
-import { UpstreamError, UpstreamResponseError, UpstreamTimeoutError } from "./upstream.js";
+import { UpstreamError, UpstreamResponseError, UpstreamTimeoutError, UpstreamUnreachableError } from "./upstream.js";
 
 const context = { tool: "find_companies", endpointUrl: "https://dev-mcp.example/mcp" };
 const text = (err: unknown): string => toToolError(err, context).content[0]!.text;
@@ -81,6 +81,10 @@ describe("toToolError", () => {
 
   it("reports a network failure as one", () => {
     assert.equal(text(new TypeError("fetch failed")), "Could not reach the Jobo API: fetch failed");
+    assert.equal(
+      text(new UpstreamUnreachableError(new TypeError("fetch failed"))),
+      "Could not reach the Jobo API: fetch failed",
+    );
   });
 
   it("reports a timeout as a timeout, in seconds", () => {
@@ -105,9 +109,18 @@ describe("isUnavailable: could not answer, as against refused", () => {
       new UpstreamError(429, ""),
       new UpstreamTimeoutError(15_000),
       new UpstreamResponseError(200),
-      new TypeError("fetch failed"),
+      new UpstreamUnreachableError(new TypeError("fetch failed")),
     ]) {
       assert.equal(isUnavailable(err), true, err.message || err.name);
+    }
+  });
+
+  it("is false for a TypeError from this server's own code, which is a bug and not an outage", () => {
+    for (const err of [
+      new TypeError("Cannot read properties of undefined (reading 'options')"),
+      new TypeError("counted.options.map is not a function"),
+    ]) {
+      assert.equal(isUnavailable(err), false, err.message);
     }
   });
 

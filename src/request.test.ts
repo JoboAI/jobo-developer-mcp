@@ -3,8 +3,18 @@ import { describe, it } from "node:test";
 
 import { JOB_SEARCH_FILTERS } from "@jobo-ai/connector-core";
 
-import { describeSearchFilters } from "./contract.js";
-import { REQUEST_PARAMETERS, buildSearchRequest, canonical, nearest, parseTimestamp, shellQuote, toCurl } from "./request.js";
+import { BILLING_SUMMARY, describeSearchFilters } from "./contract.js";
+import {
+  REQUEST_PARAMETERS,
+  asciiJson,
+  buildSearchRequest,
+  canonical,
+  nearest,
+  parseTimestamp,
+  powerShellQuote,
+  shellQuote,
+  toCurl,
+} from "./request.js";
 
 const ID = "b5e6f7a8-1234-5678-9abc-def012345678";
 
@@ -58,7 +68,10 @@ describe("build_search_request: the request", () => {
     assert.equal(request.method, "POST");
     assert.equal(request.url, "https://connect.jobo.world/api/jobs/search");
     assert.equal(request.path, "/api/jobs/search");
-    assert.deepEqual(request.headers, { "X-Api-Key": "$JOBO_API_KEY", "Content-Type": "application/json" });
+    assert.deepEqual(request.headers, {
+      "X-Api-Key": "<your API key, read from the JOBO_API_KEY environment variable>",
+      "Content-Type": "application/json",
+    });
     assert.deepEqual(request.body, {
       queries: ["nurse"],
       search_description: false,
@@ -111,12 +124,19 @@ describe("build_search_request: the request", () => {
   it("never claims to have sent anything, and says what sending would cost", () => {
     const small = built({ q: "nurse", page_size: 5 });
     assert.equal(small.sent, false);
-    assert.deepEqual(
-      { jobs: small.billing?.max_jobs_billed, credits: small.billing?.max_credits, usd: small.billing?.max_usd },
-      { jobs: 5, credits: 15, usd: 0.015 },
-    );
+    assert.equal(small.billing?.max_jobs_billed, 5);
     assert.equal(built({ q: "nurse" }).billing?.max_jobs_billed, 25, "the API's default page size");
     assert.equal(buildSearchRequest({ nope: 1 }).sent, false);
+  });
+
+  it("states the cost without a price, which depends on the account", () => {
+    const { billing } = built({ q: "nurse", page_size: 5 });
+    assert.deepEqual(Object.keys(billing ?? {}).sort(), ["max_jobs_billed", "note"]);
+    assert.ok(billing?.note.includes("billed per job returned, up to 5 jobs"), billing?.note);
+    assert.ok(billing?.note.includes("included jobs are used first"), billing?.note);
+    assert.ok(billing?.note.includes("https://jobo.world/docs/billing"), billing?.note);
+    assert.ok(!/\$\d|credits/.test(billing?.note ?? ""), `a fixed price is baked in: ${billing?.note}`);
+    assert.ok(!/\$\d|\d credits/.test(BILLING_SUMMARY), `a fixed price is baked in: ${BILLING_SUMMARY}`);
   });
 });
 
@@ -320,6 +340,41 @@ describe("build_search_request: curl", () => {
     assert.equal(shellQuote("$HOME `id` !x"), "'$HOME `id` !x'");
     assert.equal(shellQuote("it's"), "'it'\\''s'");
     assert.ok(toCurl("https://example.test/a b", {}).startsWith("curl -sS -X POST 'https://example.test/a b'"));
+  });
+});
+
+describe("build_search_request: PowerShell", () => {
+  it("is the same POST, with the key from $env:JOBO_API_KEY and the body as one quoted argument", () => {
+    const result = built({ q: "o'neill engineer", work_model: ["remote"] });
+    const powershell = result.powershell ?? "";
+    const lines = powershell.split(" `\n");
+    assert.equal(lines[0], "Invoke-RestMethod -Method Post -Uri 'https://connect.jobo.world/api/jobs/search'");
+    assert.equal(lines[1], "  -Headers @{ 'X-Api-Key' = $env:JOBO_API_KEY }");
+    assert.equal(lines[2], "  -ContentType 'application/json'");
+    assert.equal(lines[3], `  -Body '{"queries":["o''neill engineer"],"work_models":["remote"]}'`);
+    // Undo the PowerShell quoting: what PowerShell sends is the body.
+    const argument = lines[3]!.slice("  -Body ".length);
+    assert.deepEqual(JSON.parse(argument.slice(1, -1).replace(/''/g, "'")), result.request.body);
+    assert.ok(!/jbe_(live|test)_/.test(powershell));
+  });
+
+  it("sends the body in ASCII, so PowerShell 5.1's string encoding cannot mangle it", () => {
+    const result = built({ q: "Café ‘Zürich’ 東京" });
+    const body = result.powershell?.split(" `\n")[3] ?? "";
+    assert.ok(/^[\x20-\x7e]*$/.test(body), body);
+    assert.deepEqual(JSON.parse(asciiJson(result.request.body)), result.request.body);
+  });
+
+  it("quotes for PowerShell, typographic quotes included", () => {
+    assert.equal(powerShellQuote("it's"), "'it''s'");
+    assert.equal(powerShellQuote("$env:X `n"), "'$env:X `n'");
+    assert.equal(powerShellQuote("a’b"), "'a’’b'");
+  });
+
+  it("shows the header as a description, not a POSIX variable to paste into code", () => {
+    const { request } = built({ q: "nurse" });
+    assert.ok(!request.headers["X-Api-Key"]!.startsWith("$"));
+    assert.ok(request.headers["X-Api-Key"]!.includes("JOBO_API_KEY environment variable"));
   });
 });
 

@@ -1,6 +1,6 @@
 {
   "name": "jobo-developer-mcp",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Developer MCP server for the Jobo API — look up company ids, occupations and filter values, and build a valid job-search request, from inside a coding agent.",
   "mcpName": "world.jobo/developer",
   "type": "module",

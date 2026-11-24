@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.2.1
+
+Fixes from a code review: refused keys, the caller's address, and the request `build_search_request` writes.
+
+### Added
+
+- **`build_search_request` returns a PowerShell command** next to the `curl` one, for Windows PowerShell 5.1
+  and PowerShell 7. It reads the key from `$env:JOBO_API_KEY` and sends the body in ASCII.
+
+### Changed
+
+- **The request's `X-Api-Key` header is described, not written as `$JOBO_API_KEY`.** That is POSIX shell
+  syntax, and pasted into JavaScript or PowerShell it was sent as those characters. The header now says the
+  key is read from the `JOBO_API_KEY` environment variable, and the text result shows how in Node and Python.
+- **No fixed price.** The billing note and the server instructions no longer say 3 credits a job: the rate
+  depends on the account's pricing. They say a search is billed per job returned, included jobs first, at
+  the account's pay-as-you-go rate as published on the billing page. `billing` in the result drops
+  `max_credits` and `max_usd` and keeps `max_jobs_billed`.
+
+### Fixed
+
+- **One client with a bad key no longer gets everyone's lookups blocked.** The API blocks an address for
+  five minutes after 60 refused keys in five minutes, and every hosted caller reached it from this server's
+  address. A key the API refuses is now answered from memory for a minute, with the API's own words and
+  without a request; only a SHA-256 hash of the key is kept. The hosted server also sends the caller's
+  address upstream as `X-Forwarded-For`.
+- **A bug no longer passes for an outage.** Any `TypeError` used to count as "the API is unavailable", so a
+  fault in this server's own code made `find_filter_values` drop the live counts without a word. Only a
+  connection that failed on every try counts now.
+
 ## 0.2.0
 
 Local mode: run the server over stdio, with the key in an environment variable.

@@ -51,7 +51,7 @@ import {
   serverCardUrl,
 } from "./discovery.js";
 import { buildServer } from "./server.js";
-import { apiBaseUrl } from "./upstream.js";
+import { apiBaseUrl, forwardedFor } from "./upstream.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  The API key
@@ -65,8 +65,9 @@ import { apiBaseUrl } from "./upstream.js";
 //
 //  The key is read from the current request and handed to the tool call as
 //  `ctx.http.authInfo.token`; it is forwarded to the Jobo API, never stored and
-//  never logged. Which key a lookup runs on is decided in one place:
-//  `resolveApiKey` in `auth.ts`.
+//  never logged. (A key the API refuses is remembered for a minute, as a hash
+//  only: `rejected-keys.ts`.) Which key a lookup runs on is decided in one
+//  place: `resolveApiKey` in `auth.ts`.
 // ─────────────────────────────────────────────────────────────────────────────
 
 declare global {
@@ -80,7 +81,13 @@ declare global {
 
 function attachApiKey(req: express.Request, _res: express.Response, next: express.NextFunction): void {
   const key = apiKeyFromHeaders(req.headers);
-  if (key) req.auth = { token: key, clientId: "", scopes: [] };
+  if (key) {
+    // The caller's address rides along with the key, so the API's per-address
+    // throttle on refused keys counts this caller and not this server (see
+    // `forwardedFor` in `upstream.ts`).
+    const caller = forwardedFor(req.headers["x-forwarded-for"], req.socket.remoteAddress);
+    req.auth = { token: key, clientId: "", scopes: [], ...(caller ? { extra: { forwardedFor: caller } } : {}) };
+  }
   next();
 }
 

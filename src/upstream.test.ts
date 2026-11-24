@@ -1,16 +1,19 @@
 import assert from "node:assert/strict";
-import { createServer, type Server, type ServerResponse } from "node:http";
+import { createServer, type IncomingHttpHeaders, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { after, before, beforeEach, describe, it } from "node:test";
 
+import { RejectedKeys, keyHash, rejectedKeys } from "./rejected-keys.js";
 import {
   FREE_ENDPOINTS,
   REQUEST_TIMEOUT_MS,
   UpstreamError,
   UpstreamResponseError,
   UpstreamTimeoutError,
+  UpstreamUnreachableError,
   apiBaseUrl,
   callApi,
+  forwardedFor,
   isBilledPath,
   isRetryableStatus,
   parseRetryAfter,
@@ -148,6 +151,8 @@ describe("callApi", () => {
   let stub: Server;
   let saved: string | undefined;
   let requests = 0;
+  /** The headers of each request the stub got, in order. */
+  let headers: IncomingHttpHeaders[] = [];
   /** What the stub does with each request, in order; the last entry repeats. */
   let script: Array<(res: ServerResponse) => void> = [];
 
@@ -162,7 +167,8 @@ describe("callApi", () => {
   const silence = () => {};
 
   before(async () => {
-    stub = createServer((_req, res) => {
+    stub = createServer((req, res) => {
+      headers.push(req.headers);
       const step = script[Math.min(requests, script.length - 1)];
       requests++;
       step?.(res);
@@ -176,6 +182,8 @@ describe("callApi", () => {
   beforeEach(() => {
     requests = 0;
     script = [];
+    headers = [];
+    rejectedKeys.clear();
   });
 
   after(() => {
@@ -209,6 +217,7 @@ describe("callApi", () => {
   it("does not try a refusal again", async () => {
     for (const status of [400, 401, 404, 429]) {
       requests = 0;
+      rejectedKeys.clear(); // the 401 would otherwise be answered from memory on the next turn
       script = [json(status, { error: "no" }, status === 429 ? { "retry-after": "7" } : {})];
       await assert.rejects(
         callApi("occupations", KEY),
@@ -240,5 +249,96 @@ describe("callApi", () => {
     script = [(res) => res.destroy(), json(200, { suggestions: [] })];
     assert.deepEqual(await callApi("locationsSuggest", KEY, { query: { q: "berlin" } }), { suggestions: [] });
     assert.equal(requests, 2);
+  });
+
+  it("reports a connection that never answered, three times over, as unreachable", async () => {
+    script = [(res) => res.destroy()];
+    await assert.rejects(callApi("occupations", KEY), (err) => err instanceof UpstreamUnreachableError);
+    assert.equal(requests, 3);
+  });
+
+  // ── A key the API refused ────────────────────────────────────────────────
+
+  it("answers a key the API just refused itself, with the API's own words, and asks again once it is forgotten", async () => {
+    script = [json(401, { error: "Invalid or expired API key" })];
+
+    for (let call = 0; call < 3; call++) {
+      await assert.rejects(
+        callApi("companiesSuggest", KEY, { query: { q: "stripe" } }),
+        (err) => err instanceof UpstreamError && err.status === 401 && err.message.includes("Invalid or expired API key"),
+      );
+    }
+    assert.equal(requests, 1, "a refused key reached the API again within the minute");
+
+    rejectedKeys.clear(); // what the minute running out does
+    await assert.rejects(callApi("companiesSuggest", KEY, { query: { q: "stripe" } }));
+    assert.equal(requests, 2);
+  });
+
+  it("does not hold another key's refusal against this one", async () => {
+    const other = `jbe_live_${"c".repeat(21)}_${"d".repeat(43)}`;
+    script = [json(401, { error: "Invalid or expired API key" }), json(200, { suggestions: [] })];
+    await assert.rejects(callApi("companiesSuggest", other, { query: { q: "stripe" } }));
+    assert.deepEqual(await callApi("companiesSuggest", KEY, { query: { q: "stripe" } }), { suggestions: [] });
+    assert.equal(requests, 2);
+  });
+
+  it("remembers only a refusal: any other failure is asked again", async () => {
+    script = [json(403, { detail: "Not for this key." }), json(200, { suggestions: [] })];
+    await assert.rejects(callApi("companiesSuggest", KEY, { query: { q: "stripe" } }));
+    assert.deepEqual(await callApi("companiesSuggest", KEY, { query: { q: "stripe" } }), { suggestions: [] });
+    assert.equal(rejectedKeys.size, 0);
+  });
+
+  // ── The caller's address ─────────────────────────────────────────────────
+
+  it("sends the caller's address as X-Forwarded-For when it has one, and none when it does not", async () => {
+    script = [json(200, { suggestions: [] })];
+    await callApi("companiesSuggest", KEY, { query: { q: "stripe" }, forwardedFor: "203.0.113.9" });
+    await callApi("companiesSuggest", KEY, { query: { q: "stripe" } });
+    assert.equal(headers[0]?.["x-forwarded-for"], "203.0.113.9");
+    assert.equal(headers[1]?.["x-forwarded-for"], undefined);
+  });
+});
+
+describe("forwardedFor", () => {
+  it("passes on the chain the edge proxy sent, whose last entry is the caller", () => {
+    assert.equal(forwardedFor("198.51.100.7, 203.0.113.9", "10.42.0.17"), "198.51.100.7, 203.0.113.9");
+    assert.equal(forwardedFor(["198.51.100.7", "203.0.113.9"], "10.42.0.17"), "198.51.100.7, 203.0.113.9");
+    assert.equal(forwardedFor("2001:db8::1", "10.42.0.17"), "2001:db8::1");
+  });
+
+  it("sends the socket's address when no proxy sent a chain", () => {
+    assert.equal(forwardedFor(undefined, "203.0.113.9"), "203.0.113.9");
+    assert.equal(forwardedFor("", "::ffff:203.0.113.9"), "203.0.113.9");
+    assert.equal(forwardedFor(undefined, "::1"), "::1");
+    assert.equal(forwardedFor(undefined, undefined), undefined);
+  });
+
+  it("drops entries that are not addresses, and keeps the end of a long chain", () => {
+    assert.equal(forwardedFor("evil\r\nX-Api-Key: x, unknown, 203.0.113.9", "10.0.0.1"), "203.0.113.9");
+    const long = Array.from({ length: 30 }, (_, index) => `192.0.2.${index}`).join(", ");
+    const sent = forwardedFor(long, "10.0.0.1")!.split(", ");
+    assert.equal(sent.length, 10);
+    assert.equal(sent[sent.length - 1], "192.0.2.29");
+  });
+});
+
+describe("RejectedKeys", () => {
+  it("forgets a key after its minute, holds at most its bound, and stores only hashes", () => {
+    let now = 0;
+    const store = new RejectedKeys(60_000, 2, () => now);
+    store.remember("jbe_live_one", "{}");
+    assert.equal(store.rejection("jbe_live_one"), "{}");
+    now = 60_000;
+    assert.equal(store.rejection("jbe_live_one"), undefined);
+
+    store.remember("jbe_live_a", "a");
+    store.remember("jbe_live_b", "b");
+    store.remember("jbe_live_c", "c");
+    assert.equal(store.size, 2);
+    assert.equal(store.rejection("jbe_live_a"), undefined, "the oldest is the one dropped");
+    assert.deepEqual(store.storedKeys(), [keyHash("jbe_live_b"), keyHash("jbe_live_c")]);
+    for (const stored of store.storedKeys()) assert.ok(!stored.includes("jbe_"));
   });
 });

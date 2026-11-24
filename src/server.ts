@@ -101,11 +101,11 @@ export const SERVER_INSTRUCTIONS =
   "How to use it: `describe_search_filters` gives the filter contract (names, types, where each goes in the " +
   "request body). `list_filters` gives the fixed vocabularies. `find_companies`, `find_filter_values` and " +
   "`find_locations` turn a name into the id or exact value a filter takes. `build_search_request` checks a set " +
-  "of filters and returns the request body, a curl command and a `jobo` CLI command. Filter values are matched " +
+  "of filters and returns the request body, a curl command, a PowerShell command and a `jobo` CLI command. Filter values are matched " +
   "exactly, and a value the index does not hold returns zero jobs rather than an error, so look values up " +
   "instead of guessing them.\n\n" +
   `What costs money: nothing on this server. In the code you write: ${BILLING_SUMMARY} ` +
-  "`build_search_request` never sends the request. Do not run the curl or CLI command it returns unless the " +
+  "`build_search_request` never sends the request. Do not run a command it returns unless the " +
   "user wants the search run, and keep `page_size` small while testing; a sandbox key (jbe_test_…) runs search " +
   "against fictional jobs at no charge.\n\n" +
   "The key: the three `find_` tools call the Jobo API with the developer's own API key, " +
@@ -142,7 +142,12 @@ function lookup<T>(tool: ToolName, endpoint: FreeEndpoint, ctx: Ctx, options: Ca
     throw new Error(`${tool} is not declared to call ${endpoint}`);
   }
   const apiKey = resolveApiKey(callerApiKey(ctx.http?.authInfo?.token));
-  return callApi<T>(endpoint, apiKey, { ...options, userAgent: USER_AGENT });
+  const caller = ctx.http?.authInfo?.extra?.forwardedFor;
+  return callApi<T>(endpoint, apiKey, {
+    ...options,
+    userAgent: USER_AGENT,
+    ...(typeof caller === "string" ? { forwardedFor: caller } : {}),
+  });
 }
 
 const failure = (tool: ToolName) => (err: unknown) => toToolError(err, { tool, endpointUrl: ENDPOINT_URL });
@@ -494,8 +499,10 @@ export function buildServer(): McpServer {
       title: "Build a search request",
       description:
         "Check a set of search filters against the contract and return the exact request for them: method, URL, " +
-        "headers and JSON body for `POST /api/jobs/search`, a ready-to-run `curl` command and the equivalent " +
-        "`jobo` CLI command. It does not send the request: no network call, no key, no cost. Sending the request " +
+        "headers and JSON body for `POST /api/jobs/search`, a ready-to-run `curl` command (bash, zsh), the same " +
+        "request for PowerShell, and the equivalent `jobo` CLI command. The commands read the key from the " +
+        "`JOBO_API_KEY` environment variable; the headers show where it goes, not a value to paste. It does not " +
+        "send the request: no network call, no key, no cost. Sending the request " +
         "it returns is billed per job returned, and `page_size` is the most one call can bill. Parameters are the " +
         "contract's filter names, not the body's field names: pass `work_model`, not `work_models`. An unknown " +
         "name, a wrong type or a value outside a fixed vocabulary is reported with the nearest valid one, and no " +

@@ -59,16 +59,17 @@ export const SEARCH_FACETS = [
   "occupations",
 ] as const;
 
-// What the billed calls cost, as `jobo-cli` states it. 1,000 credits = $1.00.
-export const SEARCH_CREDITS_PER_JOB = 3;
-export const CREDITS_PER_DOLLAR = 1000;
+// What the billed calls cost. No price is written in here: the API charges by
+// the account's pricing group and plan, so a constant would be wrong for some
+// accounts and go stale for all of them when the published rate changes.
 export const BILLING_DOCS_URL = "https://jobo.world/docs/billing";
 
 export const BILLING_SUMMARY =
-  "Job search (`GET /api/jobs`, `POST /api/jobs/search`) is billed per job returned: $3.00 per 1,000 jobs " +
-  "(3 credits each) after the plan's included jobs; an empty page is free. The feed (`POST /api/jobs/feed`) is " +
-  "billed at the same rate per job that is new to the account. Geocoding (`GET /api/locations/geocode`) is " +
-  `$0.001 per lookup. Lookups by id and the filter, company, location and occupation lookups are free. See ${BILLING_DOCS_URL}.`;
+  "Job search (`GET /api/jobs`, `POST /api/jobs/search`) is billed per job returned: the plan's included jobs " +
+  "are used first, then each job is charged at the account's pay-as-you-go rate (the current published rate is " +
+  `at ${BILLING_DOCS_URL}); an empty page is free. The feed (\`POST /api/jobs/feed\`) is billed at the same rate ` +
+  "per job that is new to the account. Geocoding (`GET /api/locations/geocode`) is billed per lookup. Lookups by " +
+  "id and the filter, company, location and occupation lookups are free.";
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  Lookups

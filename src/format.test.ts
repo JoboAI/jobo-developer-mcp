@@ -211,6 +211,8 @@ describe("the contract tools' text", () => {
     assert.ok(text.includes("POST https://connect.jobo.world/api/jobs/search"));
     assert.ok(text.includes('"queries": [\n    "nurse"\n  ]'));
     assert.ok(text.includes("curl -sS -X POST"));
+    assert.ok(text.includes("```powershell\nInvoke-RestMethod -Method Post"));
+    assert.ok(text.includes("process.env.JOBO_API_KEY"));
     assert.ok(text.includes("jobo search nurse --skills Triage --page-size 5 --json"));
     assert.ok(text.includes("- skills: Not checked"));
     assert.ok(text.includes("up to 5 jobs"));
@@ -221,5 +223,6 @@ describe("the contract tools' text", () => {
     assert.ok(text.startsWith("No request was built: 2 problems to fix first."));
     assert.ok(text.includes("- work_models:"));
     assert.ok(!text.includes("curl"));
+    assert.ok(!text.includes("Invoke-RestMethod"));
   });
 });

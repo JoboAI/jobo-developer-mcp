@@ -3,7 +3,7 @@
   "name": "world.jobo/developer",
   "title": "Jobo Developer",
   "description": "Look up Jobo company ids, occupations and filter values while you build on the Jobo jobs API.",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "websiteUrl": "https://jobo.world/docs",
   "icons": [
     {
@@ -43,7 +43,7 @@
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "jobo-developer-mcp",
-      "version": "0.2.0",
+      "version": "0.2.1",
       "runtimeHint": "npx",
       "transport": {
         "type": "streamable-http",
@@ -62,7 +62,7 @@
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "jobo-developer-mcp",
-      "version": "0.2.0",
+      "version": "0.2.1",
       "runtimeHint": "npx",
       "transport": {
         "type": "stdio"

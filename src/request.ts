@@ -28,13 +28,11 @@ import {
 import { API_KEY_ENV } from "./auth.js";
 import {
   BILLING_DOCS_URL,
-  CREDITS_PER_DOLLAR,
   DEFAULT_PAGE_SIZE,
   MAX_PAGE_SIZE,
   MAX_SEARCH_DEPTH,
   PUBLIC_API_URL,
   REQUEST_OPTIONS,
-  SEARCH_CREDITS_PER_JOB,
   SEARCH_FACETS,
   SEARCH_PATH,
   describeFilter,
@@ -64,13 +62,19 @@ export interface BuildResult {
   /** Always false: this tool writes the request and never sends it. */
   sent: false;
   request?: SearchRequest;
-  /** POSIX shell. Reads the key from `$JOBO_API_KEY`. */
+  /** POSIX shell (bash, zsh). Reads the key from the `JOBO_API_KEY` environment variable. */
   curl?: string;
+  /** Windows PowerShell 5.1 and PowerShell 7. Reads the key from the `JOBO_API_KEY` environment variable. */
+  powershell?: string;
   /** The same search as a `jobo` CLI command; null when the CLI cannot express it. */
   cli?: string | null;
   /** Why `cli` is null. */
   cli_note?: string;
-  billing?: { max_jobs_billed: number; max_credits: number; max_usd: number; note: string };
+  /**
+   * The most one call can bill, in jobs. No price: the rate per job depends on
+   * the account's pricing and plan, which this server cannot see.
+   */
+  billing?: { max_jobs_billed: number; note: string };
 }
 
 const FILTERS_BY_KEY: ReadonlyMap<string, FilterDescriptor> = new Map(JOB_SEARCH_FILTERS.map((filter) => [filter.key, filter]));
@@ -523,6 +527,41 @@ export function toCurl(url: string, body: unknown): string {
 }
 
 /**
+ * One PowerShell string literal. Single quotes, so `$` and backticks stay
+ * literal; a quote inside is doubled. PowerShell also reads the typographic
+ * single quotes (‘ ’ ‚ ‛) as quotes, so those are doubled too.
+ */
+export function powerShellQuote(value: string): string {
+  return `'${value.replace(/['‘’‚‛]/g, (quote) => quote + quote)}'`;
+}
+
+/**
+ * JSON with every character outside ASCII written as a `\u` escape. Still the
+ * same JSON to the API, and immune to the encoding Windows PowerShell 5.1
+ * picks for a string body (not UTF-8).
+ */
+export function asciiJson(body: unknown): string {
+  return JSON.stringify(body).replace(/[\u007f-￿]/g, (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`);
+}
+
+/** The same request as `toCurl`, for PowerShell. The key comes from `$env:JOBO_API_KEY`. */
+export function toPowerShell(url: string, body: unknown): string {
+  return [
+    `Invoke-RestMethod -Method Post -Uri ${powerShellQuote(url)}`,
+    `  -Headers @{ 'X-Api-Key' = $env:${API_KEY_ENV} }`,
+    "  -ContentType 'application/json'",
+    `  -Body ${powerShellQuote(asciiJson(body))}`,
+  ].join(" `\n");
+}
+
+/**
+ * The header value as `request.headers` shows it. Not `$JOBO_API_KEY`: that is
+ * POSIX shell syntax, and pasted into JavaScript or PowerShell it would be sent
+ * as those twelve characters. The commands below read the variable themselves.
+ */
+export const API_KEY_HEADER_VALUE = `<your API key, read from the ${API_KEY_ENV} environment variable>`;
+
+/**
  * `jobo search` flags whose values may hold a comma (a company called "Acme,
  * Inc.", the subcategory "Film, TV & Stage Production"), so the CLI does not
  * split them: the flag is repeated per value. `jobo-cli` keeps the same list
@@ -646,7 +685,6 @@ export function buildSearchRequest(input: Record<string, unknown>): BuildResult 
   const url = `${PUBLIC_API_URL}${SEARCH_PATH}`;
   const cli = toCliCommand(out.filters, out.locations, paging);
   const maxJobs = paging.page_size ?? DEFAULT_PAGE_SIZE;
-  const maxCredits = maxJobs * SEARCH_CREDITS_PER_JOB;
 
   return {
     valid: true,
@@ -657,20 +695,20 @@ export function buildSearchRequest(input: Record<string, unknown>): BuildResult 
       method: "POST",
       url,
       path: SEARCH_PATH,
-      headers: { "X-Api-Key": `$${API_KEY_ENV}`, "Content-Type": "application/json" },
+      headers: { "X-Api-Key": API_KEY_HEADER_VALUE, "Content-Type": "application/json" },
       body,
     },
     curl: toCurl(url, body),
+    powershell: toPowerShell(url, body),
     cli: cli.command,
     ...(cli.command === null ? { cli_note: cli.note } : {}),
     billing: {
       max_jobs_billed: maxJobs,
-      max_credits: maxCredits,
-      max_usd: maxCredits / CREDITS_PER_DOLLAR,
       note:
-        `Sending this request is billed per job returned: up to ${maxJobs} jobs, ${SEARCH_CREDITS_PER_JOB} credits ` +
-        `($${(SEARCH_CREDITS_PER_JOB / CREDITS_PER_DOLLAR).toFixed(3)}) each after the plan's included jobs. An empty ` +
-        `page is free. A sandbox key (jbe_test_…) runs it against fictional jobs at no charge. See ${BILLING_DOCS_URL}.`,
+        `Sending this request is billed per job returned, up to ${maxJobs} jobs (its page_size). The plan's ` +
+        "included jobs are used first; after them each job is charged at the account's pay-as-you-go rate, " +
+        `which depends on the account's pricing and is published at ${BILLING_DOCS_URL}. An empty page is free. ` +
+        "A sandbox key (jbe_test_…) runs it against fictional jobs at no charge.",
     },
   };
 }

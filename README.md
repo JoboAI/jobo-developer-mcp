@@ -106,7 +106,7 @@ All six are read-only.
 | `find_locations` | needed | How a place name resolves: the labels the job index stores, the string the search `location` filter takes, and the object the feed's `locations` takes. |
 | `list_filters` | no | The fixed vocabularies: work models, employment types, experience levels, company categories, languages, sort orders, description formats, `include_fields`, and the feed's company size and revenue bands. |
 | `describe_search_filters` | no | The whole job-search filter contract: each filter's name, type, accepted values or lookup tool, `exclude_` twin, where it goes in the `POST /api/jobs/search` body (with an example), and its `jobo` CLI flag. |
-| `build_search_request` | no | A set of filters, checked against the contract → the exact request (method, URL, headers, JSON body), a `curl` command and a `jobo` CLI command. **It does not send the request.** |
+| `build_search_request` | no | A set of filters, checked against the contract → the exact request (method, URL, headers, JSON body), a `curl` command, a PowerShell command and a `jobo` CLI command. **It does not send the request.** |
 
 A sandbox key (`jbe_test_…`) cannot use the lookups: the sandbox serves job search and lookups by id only.
 
@@ -145,8 +145,12 @@ It reports two kinds of finding:
   filter. The request is still built.
 
 The body comes from `toJobSearchBody` in `@jobo-ai/connector-core`, the function `jobo-cli`, the n8n node
-and the other connectors build their search body with. `curl` reads the key from `$JOBO_API_KEY` and is
-written for a POSIX shell. The result also states the most the request can bill, which is `page_size` jobs.
+and the other connectors build their search body with. Both commands read the key from the `JOBO_API_KEY`
+environment variable: the `curl` command is written for a POSIX shell (bash, zsh), and the PowerShell one
+(`Invoke-RestMethod`, Windows PowerShell 5.1 and PowerShell 7) reads `$env:JOBO_API_KEY` and sends the body
+in ASCII, so 5.1's string encoding cannot change it. In `request.headers` the key is a description, not a
+value to paste. The result also states the most the request can bill, which is `page_size` jobs, and no
+price: the rate depends on the account.
 
 ## What costs money
 
@@ -154,14 +158,15 @@ Nothing on this server. In the API it describes:
 
 | Call | Cost |
 | --- | --- |
-| Job search: `GET /api/jobs`, `POST /api/jobs/search` | Every job returned: $3.00 per 1,000 jobs (3 credits each) after the plan's included jobs. An empty page is free. |
+| Job search: `GET /api/jobs`, `POST /api/jobs/search` | Every job returned, after the plan's included jobs, at the account's pay-as-you-go rate. An empty page is free. |
 | Feed: `POST /api/jobs/feed` | Every job that is new to the account, at the same rate. |
-| Geocoding: `GET /api/locations/geocode` | $0.001 per lookup. |
+| Geocoding: `GET /api/locations/geocode` | Per lookup. |
 | Lookups by id, and the endpoints behind this server's tools | Free. |
 
-See [Billing](https://jobo.world/docs/billing). The server's instructions tell the agent the same, and
-tell it not to run the `curl` or CLI command `build_search_request` returns unless the user wants the
-search run.
+The current published rates are on [Billing](https://jobo.world/docs/billing). The server writes no price
+into its instructions or results: the API charges by the account's pricing and plan, which it cannot see.
+The server's instructions tell the agent the same, and tell it not to run a command `build_search_request`
+returns unless the user wants the search run.
 
 ### The billed-endpoint guard
 
@@ -192,6 +197,16 @@ The key is read from each request, forwarded to the Jobo API as `X-Api-Key`, and
 echoed. Validation is the API's: this server only checks the key's shape first (the check every Jobo
 connector runs), so a mistyped key or an unexpanded `${JOBO_API_KEY}` fails with an explanation and never
 leaves.
+
+The hosted server reaches the API from inside the cluster, and the API blocks an address for five minutes
+after 60 refused keys in five minutes. So that one client looping on a bad key cannot block everyone's
+lookups:
+
+- A key the API refuses is answered from memory for a minute, with the API's own words and without a
+  request. Only a SHA-256 hash of the key is kept, in memory, bounded in size (`src/rejected-keys.ts`).
+- Each lookup carries the caller's address as `X-Forwarded-For`: the chain the edge proxy sent, whose last
+  entry is the address the proxy saw, or the socket's address when nothing is in front. The API takes the
+  last entry as the client.
 
 Which key a lookup runs on is decided by one function, `resolveApiKey` in `src/auth.ts`. Making the live
 lookups keyless later means returning a key the server holds when the caller sent none, in that function.

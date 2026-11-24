@@ -5,6 +5,7 @@ import type { AddressInfo } from "node:net";
 import { after, before, beforeEach, describe, it } from "node:test";
 
 import { AI_CATALOG_MEDIA_TYPE, SERVER_CARD_MEDIA_TYPE, SERVER_CARD_SCHEMA } from "./discovery.js";
+import { rejectedKeys } from "./rejected-keys.js";
 import { FREE_ENDPOINTS, apiBaseUrl, isBilledPath, type FreeEndpoint } from "./upstream.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -122,6 +123,7 @@ describe("the developer MCP server", () => {
     seen = [];
     outages.clear();
     clearOccupationCache(); // every test starts cold, so each sees its own upstream calls
+    rejectedKeys.clear(); // and asks the API about each key afresh
   });
 
   after(() => {
@@ -524,6 +526,29 @@ describe("the developer MCP server", () => {
       assert.equal(sandbox.isError, true);
       assert.ok(sandbox.text.includes("not available with a sandbox key"), sandbox.text);
     });
+
+    // The API blocks an address after 60 refused keys in five minutes, and
+    // every hosted caller reaches it from this server's address.
+    it("answers a refused key again from memory, in the same words, without asking the API", async () => {
+      for (let attempt = 0; attempt < 5; attempt++) {
+        const revoked = await call("find_companies", { q: "stripe" }, { authorization: `Bearer ${REVOKED_KEY}` });
+        assert.equal(revoked.isError, true);
+        assert.ok(revoked.text.includes("rejected the API key (Invalid or expired API key)"), revoked.text);
+      }
+      assert.equal(seen.length, 1, "a refused key reached the API on every call");
+
+      assert.equal((await call("find_companies", { q: "stripe" }, BEARER)).isError, false, "a good key is not affected");
+    });
+
+    it("sends the caller's address upstream, so the API's throttle counts the caller and not this server", async () => {
+      // As the edge proxy sends it: whatever came in, then the address the proxy saw.
+      await call("find_companies", { q: "stripe" }, { ...BEARER, "x-forwarded-for": "198.51.100.7, 203.0.113.9" });
+      assert.equal(seen[0]?.headers["x-forwarded-for"], "198.51.100.7, 203.0.113.9");
+
+      // No proxy in front: the socket's own address.
+      await call("find_companies", { q: "stripe" }, BEARER);
+      assert.match(String(seen[1]?.headers["x-forwarded-for"]), /^(127\.0\.0\.1|::1)$/);
+    });
   });
 
   // ── What the lookups return ────────────────────────────────────────────────
@@ -568,6 +593,14 @@ describe("the developer MCP server", () => {
       assert.ok(result.text.includes("- esco:rn — Registered Nurse (Healthcare › Nursing)\n"), result.text);
       assert.ok(result.text.includes("Live job counts are unavailable right now"));
       assert.equal(seen.filter((request) => request.pathname === "/api/occupations").length, 1);
+    });
+
+    it("find_filter_values does not pass a fault in its own code off as unavailable counts", async () => {
+      // A counts answer this server cannot read throws a TypeError in its own code: a bug to report, not an outage.
+      outages.set("/api/connectors/filter-options/occupations", { status: 200, body: { facet: "occupations", options: 42 } });
+      const result = await call("find_filter_values", { facet: "occupations", q: "nurse" }, BEARER);
+      assert.equal(result.isError, true, result.text);
+      assert.ok(!result.text.includes("Live job counts are unavailable"), result.text);
     });
 
     it("find_filter_values fails when the taxonomy itself cannot be had", async () => {
@@ -643,7 +676,10 @@ describe("the developer MCP server", () => {
         method: "POST",
         url: "https://connect.jobo.world/api/jobs/search",
         path: "/api/jobs/search",
-        headers: { "X-Api-Key": "$JOBO_API_KEY", "Content-Type": "application/json" },
+        headers: {
+          "X-Api-Key": "<your API key, read from the JOBO_API_KEY environment variable>",
+          "Content-Type": "application/json",
+        },
         body: {
           queries: ["nurse"],
           locations: ["Berlin, Germany"],
@@ -653,6 +689,9 @@ describe("the developer MCP server", () => {
         },
       });
       assert.ok(result.structured.curl.startsWith("curl -sS -X POST https://connect.jobo.world/api/jobs/search"));
+      assert.ok(
+        result.structured.powershell.startsWith("Invoke-RestMethod -Method Post -Uri 'https://connect.jobo.world/api/jobs/search'"),
+      );
       assert.equal(
         result.structured.cli,
         "jobo search nurse --location 'Berlin, Germany' --work-model remote --exclude-skills PHP --page-size 5 --json",

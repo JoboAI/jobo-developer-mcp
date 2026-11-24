@@ -7,7 +7,7 @@
  */
 
 import { API_KEYS_URL, API_KEY_ENV, ApiKeyError, STDIO, apiKeyErrorMessage } from "./auth.js";
-import { UpstreamError, UpstreamResponseError, UpstreamTimeoutError } from "./upstream.js";
+import { UpstreamError, UpstreamResponseError, UpstreamTimeoutError, UpstreamUnreachableError } from "./upstream.js";
 
 // A type alias, not an interface: the MCP SDK's tool-result type carries an
 // `[x: string]: unknown` index signature, and only aliases get the implicit
@@ -81,8 +81,12 @@ export function sentence(text: string): string {
  */
 export function isUnavailable(err: unknown): boolean {
   if (err instanceof UpstreamError) return err.status >= 500 || err.status === 429;
-  // `fetch` reports a connection that never got an answer as a TypeError.
-  return err instanceof UpstreamTimeoutError || err instanceof UpstreamResponseError || err instanceof TypeError;
+  // `fetch` reports a connection that never got an answer as a TypeError, and
+  // `callApi` wraps that in its own class. A bare TypeError is a bug in this
+  // server's code, which must surface, not pass for an outage.
+  return (
+    err instanceof UpstreamTimeoutError || err instanceof UpstreamResponseError || err instanceof UpstreamUnreachableError
+  );
 }
 
 /** Where the key lives, in the words a developer would look for it: a header, or in local mode an environment variable. */

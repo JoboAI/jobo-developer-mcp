@@ -12,6 +12,8 @@
 
 import { DEFAULT_BASE_URL } from "@jobo-ai/connector-core";
 
+import { rejectedKeys } from "./rejected-keys.js";
+
 /**
  * Where the lookups go: `JOBO_API_URL`, or the public API. Read on every call
  * rather than once at load, so the order modules happen to load in can never
@@ -118,6 +120,55 @@ export class UpstreamResponseError extends Error {
   }
 }
 
+/**
+ * The connection failed before any answer came (refused, reset, DNS), on every
+ * try. Its own class so that only this, and not any `TypeError` a bug in the
+ * code around the call throws, reads as "the API is unavailable".
+ */
+export class UpstreamUnreachableError extends Error {
+  constructor(cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause), { cause });
+    this.name = "UpstreamUnreachableError";
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  The caller's address
+//
+//  The hosted server calls the API from inside the cluster, so without help
+//  the API sees one address, this server's, for every developer behind it, and
+//  its per-address throttle on refused keys counts them all as one.
+//
+//  The edge proxy in front of this server appends the address it saw to
+//  `X-Forwarded-For`, so the last entry of the chain it sends is the caller.
+//  That chain goes upstream unchanged. The API takes the last entry of the
+//  chain as the client (ASP.NET's forwarded-headers middleware, one hop), so
+//  appending this server's own peer here, the edge proxy's address, would
+//  hand the API that instead. With no chain (no proxy in front, as when run
+//  locally) the socket's address is the caller and is sent alone.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** The most entries of an incoming chain passed on; a longer one keeps its end, where the caller is. */
+const MAX_FORWARDED_ENTRIES = 10;
+
+/** `::ffff:10.0.0.5` is how Node reports an IPv4 peer on a dual-stack socket. */
+function plainAddress(address: string): string {
+  return address.startsWith("::ffff:") && address.includes(".") ? address.slice("::ffff:".length) : address;
+}
+
+/** The `X-Forwarded-For` to send upstream for one request, or undefined when there is nothing to send. */
+export function forwardedFor(
+  incoming: string | string[] | undefined,
+  socketAddress: string | undefined,
+): string | undefined {
+  const chain = (Array.isArray(incoming) ? incoming.join(",") : (incoming ?? ""))
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0 && entry.length <= 64 && /^[0-9a-fA-F.:[\]]+$/.test(entry));
+  if (chain.length > 0) return chain.slice(-MAX_FORWARDED_ENTRIES).join(", ");
+  return socketAddress ? plainAddress(socketAddress) : undefined;
+}
+
 // The lookups are typeahead endpoints with a five-second budget of their own
 // upstream. 15s is generous against that and keeps a wedged request from
 // hanging an agent's turn (Node's fetch has no default timeout). It is the
@@ -140,6 +191,8 @@ export interface CallOptions {
   userAgent?: string;
   /** How long to wait for the whole response. Defaults to `REQUEST_TIMEOUT_MS`. */
   timeoutMs?: number;
+  /** Sent as `X-Forwarded-For`: the caller's address, from `forwardedFor`. Hosted mode only. */
+  forwardedFor?: string;
 }
 
 /**
@@ -152,11 +205,17 @@ export interface CallOptions {
  * a connection that failed before an answer came, both of which a rolling
  * deploy produces and both of which pass in a moment. What is not: any other
  * status, a timeout, and an answer that is not JSON.
+ *
+ * A key the API refused in the last minute is refused again here, with the
+ * API's own answer and without a request (see `rejected-keys.ts`).
  */
 export async function callApi<T>(endpoint: FreeEndpoint, apiKey: string, options: CallOptions = {}): Promise<T> {
   const path = upstreamPath(endpoint, options);
   // Belt and braces: FREE_ENDPOINTS holds no billed path, and a test proves it.
   if (isBilledPath(path)) throw new Error(`Refusing to call a billed endpoint: ${path}`);
+
+  const refused = rejectedKeys.rejection(apiKey);
+  if (refused !== undefined) throw new UpstreamError(401, refused);
 
   const timeoutMs = options.timeoutMs ?? REQUEST_TIMEOUT_MS;
   let lastError: unknown;
@@ -175,11 +234,13 @@ export async function callApi<T>(endpoint: FreeEndpoint, apiKey: string, options
           // server-side allowlist learns this one.
           "X-Jobo-Client": "dev-mcp",
           ...(options.userAgent ? { "User-Agent": options.userAgent } : {}),
+          ...(options.forwardedFor ? { "X-Forwarded-For": options.forwardedFor } : {}),
         },
         signal,
       });
       const text = (await response.text()).trim();
 
+      if (response.status === 401) rejectedKeys.remember(apiKey, text);
       if (!response.ok) {
         if (isRetryableStatus(response.status) && attempt < MAX_ATTEMPTS) {
           lastError = new UpstreamError(response.status, text);
@@ -208,7 +269,7 @@ export async function callApi<T>(endpoint: FreeEndpoint, apiKey: string, options
         await sleep(RETRY_BASE_DELAY_MS * attempt);
         continue;
       }
-      throw err;
+      throw new UpstreamUnreachableError(err);
     }
   }
 

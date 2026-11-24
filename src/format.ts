@@ -324,9 +324,14 @@ export function renderBuildResult(result: BuildResult): string {
   const { request } = result;
   return [
     "Request built and checked against the filter contract. Nothing was sent.",
-    `${request.method} ${request.url}\nX-Api-Key: <your key>\nContent-Type: application/json`,
+    `${request.method} ${request.url}\nX-Api-Key: <your key>\nContent-Type: application/json\n\n` +
+      "In code, read the key from the JOBO_API_KEY environment variable (process.env.JOBO_API_KEY in Node, " +
+      "os.environ[\"JOBO_API_KEY\"] in Python); never write it into the source.",
     "```json\n" + JSON.stringify(request.body, null, 2) + "\n```",
-    "curl (POSIX shell; reads the key from $JOBO_API_KEY):\n```bash\n" + (result.curl ?? "") + "\n```",
+    "curl (bash, zsh; reads the key from the JOBO_API_KEY environment variable):\n```bash\n" + (result.curl ?? "") + "\n```",
+    ...(result.powershell
+      ? ["PowerShell (reads the key from the same variable, as $env:JOBO_API_KEY):\n```powershell\n" + result.powershell + "\n```"]
+      : []),
     result.cli
       ? "jobo CLI (`npm install -g jobo-cli`; reads the same variable):\n```bash\n" + result.cli + "\n```"
       : `jobo CLI: ${result.cli_note ?? "not available for this request."}`,
